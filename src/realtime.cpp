@@ -17,7 +17,7 @@ void checkFramebufferStatus() {
 
 Realtime::Realtime(QWidget *parent)
     : QOpenGLWidget(parent), m_mouseDown(false),
-    // Camera: Cinematic Spectator View
+    // Camera: High Cinematic Angle
     m_camPos(0.f, 50.f, 60.f),
     m_camLook(0.f, -0.6f, -0.8f),
     m_camUp(0.f, 1.f, 0.f),
@@ -47,7 +47,7 @@ void Realtime::initializeGL() {
     glewInit();
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glClearColor(0.01f, 0.01f, 0.01f, 1.0f); // Pitch Black
+    glClearColor(0.01f, 0.01f, 0.01f, 1.0f);
 
     int w = size().width() * devicePixelRatio();
     int h = size().height() * devicePixelRatio();
@@ -169,15 +169,20 @@ void Realtime::updateLightPhysics() {
 // ----------------------------------------------------------------
 void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale) {
     std::unordered_map<char, std::vector<std::string>> font = {
-                                                               {'C', {"###", "#..", "#..", "#..", "###"}},
-                                                               {'S', {"###", "#..", "###", "..#", "###"}},
-                                                               {'1', {".#.", "##.", ".#.", ".#.", "###"}},
-                                                               {'2', {"###", "..#", "###", "#..", "###"}},
-                                                               {'3', {"###", "..#", "###", "..#", "###"}},
-                                                               {'0', {"###", "#.#", "#.#", "#.#", "###"}},
-                                                               {'F', {"###", "#..", "###", "#..", "#.."}},
-                                                               {'P', {"###", "#.#", "###", "#..", "#.."}},
-                                                               };
+        {'C', {"###", "#..", "#..", "#..", "###"}},
+        {'S', {"###", "#..", "###", "..#", "###"}},
+        {'1', {".#.", "##.", ".#.", ".#.", "###"}},
+        {'2', {"###", "..#", "###", "#..", "###"}},
+        {'3', {"###", "..#", "###", "..#", "###"}},
+        {'0', {"###", "#.#", "#.#", "#.#", "###"}},
+        {'F', {"###", "#..", "###", "#..", "#.."}},
+        {'P', {"###", "#.#", "###", "#..", "#.."}},
+        {'O', {"###", "#.#", "#.#", "#.#", "###"}},
+        {'R', {"###", "#.#", "##.", "#.#", "#.#"}},
+        {'E', {"###", "#..", "###", "#..", "###"}},
+        {':', {"...", ".#.", "...", ".#.", "..."}},
+        {' ', {"...", "...", "...", "...", "..."}}
+    };
 
     float spacing = 4.0f * scale;
 
@@ -198,7 +203,7 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
 }
 
 // ----------------------------------------------------------------
-// DESIGNING THE "CONTINUOUS NEON CIRCUIT"
+// DESIGNING THE "HYBRID ARENA" (Circuit Maze + PACMAN WALLS)
 // ----------------------------------------------------------------
 void Realtime::buildNeonScene() {
     m_props.clear();
@@ -208,7 +213,6 @@ void Realtime::buildNeonScene() {
     // --- SETTINGS ---
     const int RADIUS = 28;
     const float WALL_H = 3.5f;
-    const float OUTER_THICK = 2.0f;
     const float INNER_THICK = 0.8f;
     const glm::vec3 cFloor(0.0f, 0.0f, 0.0f); // Pitch Black Floor
 
@@ -225,102 +229,119 @@ void Realtime::buildNeonScene() {
         }
     }
 
-    // 2. LAYERED STADIUM BORDER
-    glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
+    // 2. LAYERED STADIUM BORDER (With SIDE PACMAN GAPS!)
+    glm::vec3 cBorder(0.0f, 1.0f, 1.0f); // Cyan
+    float gapSize = 8.0f; // Gap for portals
 
-    // Layer 1: Low Inner Bumper
+    // === LAYER 1 (Low Bumper) ===
     float b1 = RADIUS;
+    // Solid Top/Bottom
     m_props.push_back({ glm::vec3(0, 0.5f, -b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
     m_props.push_back({ glm::vec3(0, 0.5f,  b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3(-b1, 0.5f, 0), glm::vec3(1.0f, 1.0f, b1*2), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3( b1, 0.5f, 0), glm::vec3(1.0f, 1.0f, b1*2), cBorder, 1.0f });
+    // Split Left/Right
+    float len1 = b1 - gapSize/2.0f;
+    float off1 = gapSize/2.0f + len1/2.0f;
+    m_props.push_back({ glm::vec3(-b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3(-b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3( b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3( b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
 
-    // Layer 2: High Outer Wall
+    // === LAYER 2 (Mid Fence) ===
+    float b2 = RADIUS + 1.5f;
+    // Solid Top/Bottom
+    m_props.push_back({ glm::vec3(0, 1.5f, -b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f });
+    m_props.push_back({ glm::vec3(0, 1.5f,  b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f });
+    // Split Left/Right
+    float len2 = b2 - gapSize/2.0f;
+    float off2 = gapSize/2.0f + len2/2.0f;
+    m_props.push_back({ glm::vec3(-b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
+    m_props.push_back({ glm::vec3(-b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
+    m_props.push_back({ glm::vec3( b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
+    m_props.push_back({ glm::vec3( b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
+
+    // === LAYER 3 (High Wall) ===
     float b3 = RADIUS + 3.0f;
+    // Solid Top/Bottom
     m_props.push_back({ glm::vec3(0, 3.0f, -b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
     m_props.push_back({ glm::vec3(0, 3.0f,  b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(-b3, 3.0f, 0), glm::vec3(1.0f, 4.0f, b3*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3( b3, 3.0f, 0), glm::vec3(1.0f, 4.0f, b3*2), cBorder, 2.0f });
+    // Split Left/Right
+    float len3 = b3 - gapSize/2.0f;
+    float off3 = gapSize/2.0f + len3/2.0f;
+    m_props.push_back({ glm::vec3(-b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(-b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3( b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3( b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
+
+    // PORTAL MARKERS (Glowing Pads on Sides)
+    glm::vec3 cPortal(1.0f, 0.0f, 1.0f); // Magenta
+    m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f });
+    m_props.push_back({ glm::vec3( RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f });
+
+    // Static Portal Lights (Velocity 0)
+    m_lights.push_back({ glm::vec3(-RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
+    m_lights.push_back({ glm::vec3( RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
 
 
-    // 3. CONTINUOUS LINEAR MAZE
-    srand(999);
+    // 3. CIRCUIT BOARD MAZE (Long, Connected Lines)
+    srand(1234);
     auto getRainbow = [](float t) {
         return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
     };
 
-    // We draw LONG lines that are occasionally broken.
-    // Stride 10 for wide hallways
+    // Stride 10 for wide spacing
+    for (int x = 6; x < RADIUS - 4; x += 10) {
+        for (int z = 6; z < RADIUS - 4; z += 10) {
 
-    // VERTICAL LINES (Z-Axis)
-    for (int x = -RADIUS + 10; x <= RADIUS - 10; x += 10) {
-        glm::vec3 color = getRainbow(x * 0.2f);
-        glm::vec3 glassColor = color * 0.15f;
+            glm::vec3 color = getRainbow(x * 0.1f + z * 0.1f);
+            glm::vec3 glassColor = color * 0.15f;
 
-        // Draw a line from Top to Bottom, but break it into segments
-        float z = -RADIUS + 4;
-        while (z < RADIUS - 4) {
+            // Design Logic: Draw specific shapes
+            int type = rand() % 4;
 
-            // Random length for this wall segment (between 6 and 14)
-            float length = 6.0f + (rand() % 5) * 2.0f;
-
-            // Gap size (between 4 and 8)
-            float gap = 4.0f + (rand() % 3) * 2.0f;
-
-            // Ensure we don't block the center spawn area
-            if (abs(x) < 8 && abs(z + length/2) < 8) {
-                z += length + gap;
-                continue;
+            std::vector<glm::vec3> shapes;
+            if (type == 0) { // Long Vertical Bar
+                shapes.push_back({0,0,0}); shapes.push_back({0,0,2}); shapes.push_back({0,0,-2});
+            }
+            else if (type == 1) { // Long Horizontal Bar
+                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0});
+            }
+            else if (type == 2) { // L-Shape (Corner)
+                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({0,0,2});
+            }
+            else { // U-Shape (Room)
+                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0}); shapes.push_back({2,0,2}); shapes.push_back({-2,0,2});
             }
 
-            // Draw Wall Segment
-            if (z + length < RADIUS - 4) {
-                glm::vec3 pos(x, WALL_H/2.0f - 0.5f, z + length/2.0f);
-                glm::vec3 scale(INNER_THICK, WALL_H, length);
+            // Mirror 4 ways
+            for (auto& offset : shapes) {
+                float q1x = x + offset.x;
+                float q1z = z + offset.z;
 
-                m_props.push_back({ pos, scale, glassColor, 4.0f });
+                glm::vec3 hScale(INNER_THICK, WALL_H, 2.0f); // Vertical
+                glm::vec3 wScale(2.0f, WALL_H, INNER_THICK); // Horizontal
 
-                // Mark Collision
-                int gx = (int)(pos.x) + 30;
-                int rZ = (int)(scale.z/2.0f);
-                for(int dz = -rZ; dz <= rZ; dz++) {
-                    int gz = (int)(pos.z + dz) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
+                // Determine scale based on shape flow
+                glm::vec3 finalScale = (type == 1 || (type > 1 && offset.z == 0)) ? wScale : hScale;
+
+                std::vector<glm::vec3> positions = {
+                    { q1x, WALL_H/2.0f - 0.5f, q1z }, { -q1x, WALL_H/2.0f - 0.5f, q1z },
+                    { q1x, WALL_H/2.0f - 0.5f, -q1z }, { -q1x, WALL_H/2.0f - 0.5f, -q1z }
+                };
+
+                for(auto& p : positions) {
+                    m_props.push_back({ p, finalScale, glassColor, 4.0f });
+
+                    // Mark Collision
+                    int rX = (int)(finalScale.x/2.0f)+1;
+                    int rZ = (int)(finalScale.z/2.0f)+1;
+                    for(int dx = -rX; dx <= rX; dx++) {
+                        for(int dz = -rZ; dz <= rZ; dz++) {
+                            int gx = (int)(p.x + dx) + 30; int gz = (int)(p.z + dz) + 30;
+                            if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
+                        }
+                    }
                 }
             }
-            z += length + gap;
-        }
-    }
-
-    // HORIZONTAL LINES (X-Axis) - Fewer of these to keep flow open
-    for (int z = -RADIUS + 10; z <= RADIUS - 10; z += 10) {
-        glm::vec3 color = getRainbow(z * 0.2f + 2.0f);
-        glm::vec3 glassColor = color * 0.15f;
-
-        float x = -RADIUS + 4;
-        while (x < RADIUS - 4) {
-            float length = 6.0f + (rand() % 5) * 2.0f;
-            float gap = 6.0f + (rand() % 4) * 2.0f; // Bigger gaps for X lines
-
-            if (abs(z) < 8 && abs(x + length/2) < 8) {
-                x += length + gap;
-                continue;
-            }
-
-            if (x + length < RADIUS - 4 && rand()%100 < 60) { // 60% chance to exist
-                glm::vec3 pos(x + length/2.0f, WALL_H/2.0f - 0.5f, z);
-                glm::vec3 scale(length, WALL_H, INNER_THICK);
-
-                m_props.push_back({ pos, scale, glassColor, 4.0f });
-
-                int gz = (int)(pos.z) + 30;
-                int rX = (int)(scale.x/2.0f);
-                for(int dx = -rX; dx <= rX; dx++) {
-                    int gx = (int)(pos.x + dx) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-                }
-            }
-            x += length + gap;
         }
     }
 
@@ -349,7 +370,6 @@ void Realtime::buildNeonScene() {
 // ----------------------------------------------------------------
 void Realtime::paintGL() {
     m_defaultFBO = defaultFramebufferObject();
-
     while (glGetError() != GL_NO_ERROR);
 
     int w = size().width() * devicePixelRatio();
