@@ -86,20 +86,18 @@ private:
         glm::vec3 scale;
         glm::vec3 color;
         float emissiveStrength;
-        GLuint textureID; // <--- NEW: Stores which texture to use (0 = None)
+        GLuint textureID; // 5th Argument
     };
     std::vector<ArenaProp> m_props;
 
-    // Lights
     struct SimpleLight {
         glm::vec3 pos;
-        glm::vec3 vel;
+        glm::vec3 vel;    // 2nd Argument (Physics)
         glm::vec3 color;
         float radius;
     };
     std::vector<SimpleLight> m_lights;
 
-    // Collision Data
     std::vector<std::vector<int>> m_mazeGrid;
     const int GRID_SIZE = 60;
     const float GRID_SCALE = 1.0f;
@@ -115,14 +113,14 @@ private:
     int m_terrainNumVerts = 0;
 
     GLuint m_grassDiffuseTex = 0;
-    GLuint m_wallTexture = 0; // <--- NEW: Handle for the wall texture
+    GLuint m_wallTexture = 0;
 
     SnakeGame m_snake;
 
     // --- HELPERS ---
     void buildNeonScene();
     void updateLightPhysics();
-    void drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID); // Updated Arg
+    void drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID);
 
     void initCube();
     void initQuad();

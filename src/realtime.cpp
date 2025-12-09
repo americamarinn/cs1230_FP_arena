@@ -88,9 +88,9 @@ void Realtime::initializeGL() {
     initQuad();
     initTerrain();
 
-    // *** LOAD TEXTURES ***
+    // ** LOAD TEXTURES **
+    m_grassDiffuseTex = loadTexture2D("resources/textures/grass_color.jpg");
     m_startTexture = loadTexture2D("resources/textures/start_screen.jpg");
-    // Make sure you add this file! If missing, it will just appear black/cyan.
     m_wallTexture = loadTexture2D("resources/textures/wall_texture.jpg");
 
     buildNeonScene();
@@ -136,6 +136,7 @@ void Realtime::updateLightPhysics() {
     }
 }
 
+// Fixed 5 Arguments: Pos, Text, Color, Scale, TextureID
 void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID) {
     std::unordered_map<char, std::vector<std::string>> font = {
                                                                {'C', {"###", "#..", "#..", "#..", "###"}}, {'S', {"###", "#..", "###", "..#", "###"}},
@@ -151,7 +152,6 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
                 for (int x = 0; x < 3; x++) {
                     if (bitmap[y][x] == '#') {
                         glm::vec3 pos = startPos + glm::vec3(x * scale, 0, (y) * scale);
-                        // Apply Texture ID here!
                         m_props.push_back({ pos, glm::vec3(scale, 0.1f, scale), color, 4.0f, texID });
                     }
                 }
@@ -169,7 +169,6 @@ void Realtime::buildNeonScene() {
     // --- SETTINGS ---
     const int RADIUS = 28;
     const float WALL_H = 3.5f;
-    const float OUTER_THICK = 2.0f;
     const float INNER_THICK = 0.8f;
     const glm::vec3 cFloor(0.0f, 0.0f, 0.0f);
 
@@ -177,16 +176,20 @@ void Realtime::buildNeonScene() {
     for(int x = -RADIUS - 6; x <= RADIUS + 6; x+=2) {
         for(int z = -RADIUS - 6; z <= RADIUS + 6; z+=2) {
             float brightness = ((x/2 + z/2) % 2 == 0) ? 0.8f : 0.6f;
-            // Floor doesn't need the wall texture, keeps clean grid look
-            m_props.push_back({ glm::vec3(x, -0.6f, z), glm::vec3(1.9f, 0.1f, 1.9f), cFloor + glm::vec3(0.015f) * brightness, 0.0f, 0 });
+            m_props.push_back({
+                glm::vec3(x, -0.6f, z),
+                glm::vec3(1.9f, 0.1f, 1.9f),
+                cFloor + glm::vec3(0.015f) * brightness,
+                0.0f, 0
+            });
         }
     }
 
-    // 2. OUTER BORDER (TEXTURED!)
-    glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
-    float gapSize = 8.0f;
+    // 2. STADIUM BOUNDARY (CLASSIC LOOK) + TEXTURE
+    glm::vec3 cBorder(0.0f, 1.0f, 1.0f); // Cyan
+    float gapSize = 8.0f; // Side Portal Gaps
 
-    // Layer 1
+    // Layer 1 (Low)
     float b1 = RADIUS;
     m_props.push_back({ glm::vec3(0, 0.5f, -b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f, m_wallTexture });
     m_props.push_back({ glm::vec3(0, 0.5f,  b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f, m_wallTexture });
@@ -196,7 +199,7 @@ void Realtime::buildNeonScene() {
     m_props.push_back({ glm::vec3( b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
     m_props.push_back({ glm::vec3( b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
 
-    // Layer 2
+    // Layer 2 (Mid)
     float b2 = RADIUS + 1.5f;
     m_props.push_back({ glm::vec3(0, 1.5f, -b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f, m_wallTexture });
     m_props.push_back({ glm::vec3(0, 1.5f,  b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f, m_wallTexture });
@@ -206,7 +209,7 @@ void Realtime::buildNeonScene() {
     m_props.push_back({ glm::vec3( b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
     m_props.push_back({ glm::vec3( b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
 
-    // Layer 3
+    // Layer 3 (High)
     float b3 = RADIUS + 3.0f;
     m_props.push_back({ glm::vec3(0, 3.0f, -b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f, m_wallTexture });
     m_props.push_back({ glm::vec3(0, 3.0f,  b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f, m_wallTexture });
@@ -216,14 +219,16 @@ void Realtime::buildNeonScene() {
     m_props.push_back({ glm::vec3( b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
     m_props.push_back({ glm::vec3( b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
 
-    // PORTAL MARKERS
+    // Portal Pads
     glm::vec3 cPortal(1.0f, 0.0f, 1.0f); // Magenta
     m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
     m_props.push_back({ glm::vec3( RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
+
+    // Portal Lights (FIX: Added vec3(0) for velocity)
     m_lights.push_back({ glm::vec3(-RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
     m_lights.push_back({ glm::vec3( RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
 
-    // 3. CIRCUIT BOARD MAZE (Clean, No Texture to keep it sleek)
+    // 3. CIRCUIT BOARD MAZE (Sleek inner walls, No Texture)
     srand(1234);
     auto getRainbow = [](float t) {
         return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
@@ -247,7 +252,7 @@ void Realtime::buildNeonScene() {
                 glm::vec3 finalScale = (type == 1 || (type > 1 && offset.z == 0)) ? wScale : hScale;
                 std::vector<glm::vec3> positions = { { q1x, WALL_H/2.0f - 0.5f, q1z }, { -q1x, WALL_H/2.0f - 0.5f, q1z }, { q1x, WALL_H/2.0f - 0.5f, -q1z }, { -q1x, WALL_H/2.0f - 0.5f, -q1z } };
                 for(auto& p : positions) {
-                    m_props.push_back({ p, finalScale, glassColor, 4.0f, 0 }); // Inner walls = No Texture (Sleek)
+                    m_props.push_back({ p, finalScale, glassColor, 4.0f, 0 });
                     int rX = (int)(finalScale.x/2.0f)+1; int rZ = (int)(finalScale.z/2.0f)+1;
                     for(int dx = -rX; dx <= rX; dx++) { for(int dz = -rZ; dz <= rZ; dz++) {
                             int gx = (int)(p.x + dx) + 30; int gz = (int)(p.z + dz) + 30;
@@ -258,7 +263,7 @@ void Realtime::buildNeonScene() {
         }
     }
 
-    // 4. SPAWN 80 BOUNCING LIGHTS
+    // 4. BOUNCING LIGHTS
     for(int i=0; i<80; i++) {
         float rX = (rand() % (RADIUS*2)) - RADIUS; float rZ = (rand() % (RADIUS*2)) - RADIUS;
         int gx = (int)(rX) + 30; int gz = (int)(rZ) + 30;
@@ -269,7 +274,7 @@ void Realtime::buildNeonScene() {
         m_lights.push_back({ glm::vec3(rX, 1.5f, rZ), glm::vec3(vx, 0, vz), color, 0.0f });
     }
 
-    // 5. TITLE TEXT (TEXTURED!)
+    // 5. TITLE TEXT (With Texture!)
     drawVoxelText(glm::vec3(-25.0f, 12.0f, -RADIUS - 5.0f), "CS1230", glm::vec3(0,1,1), 2.5f, m_wallTexture);
 }
 
@@ -301,7 +306,7 @@ void Realtime::paintGL() {
         return;
     }
 
-    // --- PHASE 1: GEOMETRY PASS ---
+    // --- PHASE 1: GEOMETRY ---
     m_gbuffer.bindForWriting();
     glViewport(0, 0, w, h);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -319,7 +324,7 @@ void Realtime::paintGL() {
         glm::vec3 emissive = prop.color * prop.emissiveStrength;
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"), 1, &emissive[0]);
 
-        // ** TEXTURE LOGIC **
+        // ** TEXTURE BINDING **
         if (prop.textureID != 0) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, prop.textureID);
@@ -334,12 +339,11 @@ void Realtime::paintGL() {
     glBindVertexArray(0);
     GL_CHECK();
 
-    // --- PHASE 2: LIGHTING PASS ---
+    // --- PHASE 2: LIGHTING ---
     glDisable(GL_DEPTH_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, m_lightingFBO);
     glViewport(0, 0, w, h);
     glClear(GL_COLOR_BUFFER_BIT);
-
     glUseProgram(m_deferredShader);
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_gbuffer.getPositionTex());
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_gbuffer.getNormalTex());
@@ -350,11 +354,9 @@ void Realtime::paintGL() {
     glUniform1i(glGetUniformLocation(m_deferredShader, "gAlbedo"), 2);
     glUniform1i(glGetUniformLocation(m_deferredShader, "gEmissive"), 3);
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
-
     int numLights = std::min((int)m_lights.size(), 100);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
     glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.5f);
-
     for(int i=0; i<numLights; i++) {
         std::string base = "lights[" + std::to_string(i) + "]";
         glUniform1i(glGetUniformLocation(m_deferredShader, (base + ".type").c_str()), 0);
