@@ -7,7 +7,6 @@
 #include "utils/debug.h"
 #include <cstdlib>
 
-// --- DEBUG HELPER ---
 void checkFramebufferStatus() {
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -17,7 +16,6 @@ void checkFramebufferStatus() {
 
 Realtime::Realtime(QWidget *parent)
     : QOpenGLWidget(parent), m_mouseDown(false),
-    // Camera: High Cinematic Angle
     m_camPos(0.f, 50.f, 60.f),
     m_camLook(0.f, -0.6f, -0.8f),
     m_camUp(0.f, 1.f, 0.f),
@@ -53,16 +51,13 @@ void Realtime::initializeGL() {
     int h = size().height() * devicePixelRatio();
     m_defaultFBO = defaultFramebufferObject();
 
-    // 1. Init G-Buffer
     m_gbuffer.init(w, h);
 
-    // 2. Load Shaders
     m_gbufferShader = ShaderLoader::createShaderProgram("resources/shaders/gbuffer.vert", "resources/shaders/gbuffer.frag");
     m_deferredShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/deferredLighting.frag");
     m_blurShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/blur.frag");
     m_compositeShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/composite.frag");
 
-    // 3. Init Lighting FBO
     glGenFramebuffers(1, &m_lightingFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_lightingFBO);
     glGenTextures(1, &m_lightingTexture);
@@ -75,7 +70,6 @@ void Realtime::initializeGL() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_lightingTexture, 0);
     checkFramebufferStatus();
 
-    // 4. Init Ping-Pong FBOs
     glGenFramebuffers(2, m_pingpongFBO);
     glGenTextures(2, m_pingpongColorbuffers);
     for (unsigned int i = 0; i < 2; i++) {
@@ -90,18 +84,18 @@ void Realtime::initializeGL() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // 5. Init Geometry & Resources
     initCube();
     initQuad();
     initTerrain();
 
-    m_grassDiffuseTex = loadTexture2D("resources/textures/grass_color.jpg");
+    // *** LOAD TEXTURES ***
     m_startTexture = loadTexture2D("resources/textures/start_screen.jpg");
+    // Make sure you add this file! If missing, it will just appear black/cyan.
+    m_wallTexture = loadTexture2D("resources/textures/wall_texture.jpg");
 
     buildNeonScene();
     m_snake.init();
 
-    // Camera Init
     m_camera.setViewMatrix(m_camPos, m_camLook, glm::vec3(0,1,0));
     float aspect = (float)width() / (float)height();
     m_camera.setProjectionMatrix(aspect, 0.1f, 100.f, glm::radians(45.f));
@@ -110,9 +104,6 @@ void Realtime::initializeGL() {
     m_timer = startTimer(1000/60);
 }
 
-// ----------------------------------------------------------------
-// THE GAME LOOP
-// ----------------------------------------------------------------
 void Realtime::timerEvent(QTimerEvent *event) {
     if (m_gameState == PLAYING || m_gameState == START_SCREEN) {
         updateLightPhysics();
@@ -120,72 +111,39 @@ void Realtime::timerEvent(QTimerEvent *event) {
     }
 }
 
-// ----------------------------------------------------------------
-// PHYSICS UPDATE: BOUNCING LIGHTS
-// ----------------------------------------------------------------
 void Realtime::updateLightPhysics() {
     float arenaBounds = 28.0f;
-
     for(auto& light : m_lights) {
-        if (light.radius != 0.0f) continue; // Skip static lights
-
+        if (light.radius != 0.0f) continue;
         glm::vec3 nextPos = light.pos + light.vel;
-
-        // Map world position to our collision grid (0 to 60)
         int gx = (int)(nextPos.x / GRID_SCALE) + 30;
         int gz = (int)(nextPos.z / GRID_SCALE) + 30;
-
         bool hit = false;
-
-        // Check Bounds
         if (abs(nextPos.x) > arenaBounds) { light.vel.x *= -1; hit = true; }
         if (abs(nextPos.z) > arenaBounds) { light.vel.z *= -1; hit = true; }
-
-        // Check Maze Walls
         if (!hit && gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) {
             if (m_mazeGrid[gx][gz] == 1) {
-                // Bounce Logic
                 int prevGx = (int)(light.pos.x / GRID_SCALE) + 30;
                 int prevGz = (int)(light.pos.z / GRID_SCALE) + 30;
-
                 if (gx != prevGx) light.vel.x *= -1;
                 else if (gz != prevGz) light.vel.z *= -1;
                 else light.vel *= -1.0f;
-
                 hit = true;
             }
         }
-
-        if (!hit) {
-            light.pos = nextPos;
-        } else {
-            light.pos += light.vel;
-        }
+        if (!hit) light.pos = nextPos;
+        else light.pos += light.vel;
     }
 }
 
-// ----------------------------------------------------------------
-// VOXEL TEXT GENERATOR
-// ----------------------------------------------------------------
-void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale) {
+void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID) {
     std::unordered_map<char, std::vector<std::string>> font = {
-        {'C', {"###", "#..", "#..", "#..", "###"}},
-        {'S', {"###", "#..", "###", "..#", "###"}},
-        {'1', {".#.", "##.", ".#.", ".#.", "###"}},
-        {'2', {"###", "..#", "###", "#..", "###"}},
-        {'3', {"###", "..#", "###", "..#", "###"}},
-        {'0', {"###", "#.#", "#.#", "#.#", "###"}},
-        {'F', {"###", "#..", "###", "#..", "#.."}},
-        {'P', {"###", "#.#", "###", "#..", "#.."}},
-        {'O', {"###", "#.#", "#.#", "#.#", "###"}},
-        {'R', {"###", "#.#", "##.", "#.#", "#.#"}},
-        {'E', {"###", "#..", "###", "#..", "###"}},
-        {':', {"...", ".#.", "...", ".#.", "..."}},
-        {' ', {"...", "...", "...", "...", "..."}}
-    };
-
+                                                               {'C', {"###", "#..", "#..", "#..", "###"}}, {'S', {"###", "#..", "###", "..#", "###"}},
+                                                               {'1', {".#.", "##.", ".#.", ".#.", "###"}}, {'2', {"###", "..#", "###", "#..", "###"}},
+                                                               {'3', {"###", "..#", "###", "..#", "###"}}, {'0', {"###", "#.#", "#.#", "#.#", "###"}},
+                                                               {'F', {"###", "#..", "###", "#..", "#.."}}, {'P', {"###", "#.#", "###", "#..", "#.."}},
+                                                               };
     float spacing = 4.0f * scale;
-
     for (char c : text) {
         if (font.find(c) != font.end()) {
             auto bitmap = font[c];
@@ -193,7 +151,8 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
                 for (int x = 0; x < 3; x++) {
                     if (bitmap[y][x] == '#') {
                         glm::vec3 pos = startPos + glm::vec3(x * scale, 0, (y) * scale);
-                        m_props.push_back({ pos, glm::vec3(scale, 0.1f, scale), color, 4.0f });
+                        // Apply Texture ID here!
+                        m_props.push_back({ pos, glm::vec3(scale, 0.1f, scale), color, 4.0f, texID });
                     }
                 }
             }
@@ -202,9 +161,6 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
     }
 }
 
-// ----------------------------------------------------------------
-// DESIGNING THE "HYBRID ARENA" (Circuit Maze + PACMAN WALLS)
-// ----------------------------------------------------------------
 void Realtime::buildNeonScene() {
     m_props.clear();
     m_lights.clear();
@@ -213,133 +169,90 @@ void Realtime::buildNeonScene() {
     // --- SETTINGS ---
     const int RADIUS = 28;
     const float WALL_H = 3.5f;
+    const float OUTER_THICK = 2.0f;
     const float INNER_THICK = 0.8f;
-    const glm::vec3 cFloor(0.0f, 0.0f, 0.0f); // Pitch Black Floor
+    const glm::vec3 cFloor(0.0f, 0.0f, 0.0f);
 
     // 1. FLOOR
     for(int x = -RADIUS - 6; x <= RADIUS + 6; x+=2) {
         for(int z = -RADIUS - 6; z <= RADIUS + 6; z+=2) {
             float brightness = ((x/2 + z/2) % 2 == 0) ? 0.8f : 0.6f;
-            m_props.push_back({
-                glm::vec3(x, -0.6f, z),
-                glm::vec3(1.9f, 0.1f, 1.9f),
-                cFloor + glm::vec3(0.015f) * brightness,
-                0.0f
-            });
+            // Floor doesn't need the wall texture, keeps clean grid look
+            m_props.push_back({ glm::vec3(x, -0.6f, z), glm::vec3(1.9f, 0.1f, 1.9f), cFloor + glm::vec3(0.015f) * brightness, 0.0f, 0 });
         }
     }
 
-    // 2. LAYERED STADIUM BORDER (With SIDE PACMAN GAPS!)
-    glm::vec3 cBorder(0.0f, 1.0f, 1.0f); // Cyan
-    float gapSize = 8.0f; // Gap for portals
+    // 2. OUTER BORDER (TEXTURED!)
+    glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
+    float gapSize = 8.0f;
 
-    // === LAYER 1 (Low Bumper) ===
+    // Layer 1
     float b1 = RADIUS;
-    // Solid Top/Bottom
-    m_props.push_back({ glm::vec3(0, 0.5f, -b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3(0, 0.5f,  b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
-    // Split Left/Right
-    float len1 = b1 - gapSize/2.0f;
-    float off1 = gapSize/2.0f + len1/2.0f;
-    m_props.push_back({ glm::vec3(-b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3(-b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3( b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
-    m_props.push_back({ glm::vec3( b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3(0, 0.5f, -b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3(0, 0.5f,  b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f, m_wallTexture });
+    float len1 = b1 - gapSize/2.0f; float off1 = gapSize/2.0f + len1/2.0f;
+    m_props.push_back({ glm::vec3(-b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3(-b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b1, 0.5f, off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b1, 0.5f, -off1), glm::vec3(1.0f, 1.0f, len1*2), cBorder, 1.0f, m_wallTexture });
 
-    // === LAYER 2 (Mid Fence) ===
+    // Layer 2
     float b2 = RADIUS + 1.5f;
-    // Solid Top/Bottom
-    m_props.push_back({ glm::vec3(0, 1.5f, -b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f });
-    m_props.push_back({ glm::vec3(0, 1.5f,  b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f });
-    // Split Left/Right
-    float len2 = b2 - gapSize/2.0f;
-    float off2 = gapSize/2.0f + len2/2.0f;
-    m_props.push_back({ glm::vec3(-b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
-    m_props.push_back({ glm::vec3(-b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
-    m_props.push_back({ glm::vec3( b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
-    m_props.push_back({ glm::vec3( b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f });
+    m_props.push_back({ glm::vec3(0, 1.5f, -b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f, m_wallTexture });
+    m_props.push_back({ glm::vec3(0, 1.5f,  b2), glm::vec3(b2*2, 2.0f, 1.0f), cBorder, 1.5f, m_wallTexture });
+    float len2 = b2 - gapSize/2.0f; float off2 = gapSize/2.0f + len2/2.0f;
+    m_props.push_back({ glm::vec3(-b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
+    m_props.push_back({ glm::vec3(-b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b2, 1.5f, off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b2, 1.5f, -off2), glm::vec3(1.0f, 2.0f, len2*2), cBorder, 1.5f, m_wallTexture });
 
-    // === LAYER 3 (High Wall) ===
+    // Layer 3
     float b3 = RADIUS + 3.0f;
-    // Solid Top/Bottom
-    m_props.push_back({ glm::vec3(0, 3.0f, -b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(0, 3.0f,  b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
-    // Split Left/Right
-    float len3 = b3 - gapSize/2.0f;
-    float off3 = gapSize/2.0f + len3/2.0f;
-    m_props.push_back({ glm::vec3(-b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(-b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3( b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3( b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(0, 3.0f, -b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3(0, 3.0f,  b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f, m_wallTexture });
+    float len3 = b3 - gapSize/2.0f; float off3 = gapSize/2.0f + len3/2.0f;
+    m_props.push_back({ glm::vec3(-b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3(-b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
+    m_props.push_back({ glm::vec3( b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
 
-    // PORTAL MARKERS (Glowing Pads on Sides)
+    // PORTAL MARKERS
     glm::vec3 cPortal(1.0f, 0.0f, 1.0f); // Magenta
-    m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f });
-    m_props.push_back({ glm::vec3( RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f });
-
-    // Static Portal Lights (Velocity 0)
+    m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
+    m_props.push_back({ glm::vec3( RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
     m_lights.push_back({ glm::vec3(-RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
     m_lights.push_back({ glm::vec3( RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
 
-
-    // 3. CIRCUIT BOARD MAZE (Long, Connected Lines)
+    // 3. CIRCUIT BOARD MAZE (Clean, No Texture to keep it sleek)
     srand(1234);
     auto getRainbow = [](float t) {
         return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
     };
 
-    // Stride 10 for wide spacing
     for (int x = 6; x < RADIUS - 4; x += 10) {
         for (int z = 6; z < RADIUS - 4; z += 10) {
-
             glm::vec3 color = getRainbow(x * 0.1f + z * 0.1f);
             glm::vec3 glassColor = color * 0.15f;
-
-            // Design Logic: Draw specific shapes
             int type = rand() % 4;
-
             std::vector<glm::vec3> shapes;
-            if (type == 0) { // Long Vertical Bar
-                shapes.push_back({0,0,0}); shapes.push_back({0,0,2}); shapes.push_back({0,0,-2});
-            }
-            else if (type == 1) { // Long Horizontal Bar
-                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0});
-            }
-            else if (type == 2) { // L-Shape (Corner)
-                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({0,0,2});
-            }
-            else { // U-Shape (Room)
-                shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0}); shapes.push_back({2,0,2}); shapes.push_back({-2,0,2});
-            }
+            if (type == 0) { shapes.push_back({0,0,0}); shapes.push_back({0,0,2}); shapes.push_back({0,0,-2}); }
+            else if (type == 1) { shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0}); }
+            else if (type == 2) { shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({0,0,2}); }
+            else { shapes.push_back({0,0,0}); shapes.push_back({2,0,0}); shapes.push_back({-2,0,0}); shapes.push_back({2,0,2}); shapes.push_back({-2,0,2}); }
 
-            // Mirror 4 ways
             for (auto& offset : shapes) {
-                float q1x = x + offset.x;
-                float q1z = z + offset.z;
-
-                glm::vec3 hScale(INNER_THICK, WALL_H, 2.0f); // Vertical
-                glm::vec3 wScale(2.0f, WALL_H, INNER_THICK); // Horizontal
-
-                // Determine scale based on shape flow
+                float q1x = x + offset.x; float q1z = z + offset.z;
+                glm::vec3 hScale(INNER_THICK, WALL_H, 2.0f);
+                glm::vec3 wScale(2.0f, WALL_H, INNER_THICK);
                 glm::vec3 finalScale = (type == 1 || (type > 1 && offset.z == 0)) ? wScale : hScale;
-
-                std::vector<glm::vec3> positions = {
-                    { q1x, WALL_H/2.0f - 0.5f, q1z }, { -q1x, WALL_H/2.0f - 0.5f, q1z },
-                    { q1x, WALL_H/2.0f - 0.5f, -q1z }, { -q1x, WALL_H/2.0f - 0.5f, -q1z }
-                };
-
+                std::vector<glm::vec3> positions = { { q1x, WALL_H/2.0f - 0.5f, q1z }, { -q1x, WALL_H/2.0f - 0.5f, q1z }, { q1x, WALL_H/2.0f - 0.5f, -q1z }, { -q1x, WALL_H/2.0f - 0.5f, -q1z } };
                 for(auto& p : positions) {
-                    m_props.push_back({ p, finalScale, glassColor, 4.0f });
-
-                    // Mark Collision
-                    int rX = (int)(finalScale.x/2.0f)+1;
-                    int rZ = (int)(finalScale.z/2.0f)+1;
-                    for(int dx = -rX; dx <= rX; dx++) {
-                        for(int dz = -rZ; dz <= rZ; dz++) {
+                    m_props.push_back({ p, finalScale, glassColor, 4.0f, 0 }); // Inner walls = No Texture (Sleek)
+                    int rX = (int)(finalScale.x/2.0f)+1; int rZ = (int)(finalScale.z/2.0f)+1;
+                    for(int dx = -rX; dx <= rX; dx++) { for(int dz = -rZ; dz <= rZ; dz++) {
                             int gx = (int)(p.x + dx) + 30; int gz = (int)(p.z + dz) + 30;
                             if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-                        }
-                    }
+                        }}
                 }
             }
         }
@@ -347,27 +260,19 @@ void Realtime::buildNeonScene() {
 
     // 4. SPAWN 80 BOUNCING LIGHTS
     for(int i=0; i<80; i++) {
-        float rX = (rand() % (RADIUS*2)) - RADIUS;
-        float rZ = (rand() % (RADIUS*2)) - RADIUS;
-
+        float rX = (rand() % (RADIUS*2)) - RADIUS; float rZ = (rand() % (RADIUS*2)) - RADIUS;
         int gx = (int)(rX) + 30; int gz = (int)(rZ) + 30;
         if(gx >=0 && gx<60 && gz>=0 && gz<60 && m_mazeGrid[gx][gz] == 1) continue;
-
-        float vx = ((rand() % 100) / 100.0f - 0.5f) * 0.3f;
-        float vz = ((rand() % 100) / 100.0f - 0.5f) * 0.3f;
+        float vx = ((rand() % 100) / 100.0f - 0.5f) * 0.3f; float vz = ((rand() % 100) / 100.0f - 0.5f) * 0.3f;
         if (abs(vx) < 0.05f) vx = 0.1f;
-
         glm::vec3 color = getRainbow(i * 0.3f);
         m_lights.push_back({ glm::vec3(rX, 1.5f, rZ), glm::vec3(vx, 0, vz), color, 0.0f });
     }
 
-    // 5. TITLE TEXT
-    drawVoxelText(glm::vec3(-25.0f, 12.0f, -RADIUS - 5.0f), "CS1230", glm::vec3(0,1,1), 2.5f);
+    // 5. TITLE TEXT (TEXTURED!)
+    drawVoxelText(glm::vec3(-25.0f, 12.0f, -RADIUS - 5.0f), "CS1230", glm::vec3(0,1,1), 2.5f, m_wallTexture);
 }
 
-// ----------------------------------------------------------------
-// RENDER LOOP
-// ----------------------------------------------------------------
 void Realtime::paintGL() {
     m_defaultFBO = defaultFramebufferObject();
     while (glGetError() != GL_NO_ERROR);
@@ -380,7 +285,6 @@ void Realtime::paintGL() {
         glBindFramebuffer(GL_FRAMEBUFFER, m_defaultFBO);
         glViewport(0, 0, w, h);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
         if (m_startTexture != 0) {
             glUseProgram(m_compositeShader);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_startTexture);
@@ -406,7 +310,6 @@ void Realtime::paintGL() {
     glUseProgram(m_gbufferShader);
     glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "view"), 1, GL_FALSE, &m_camera.getViewMatrix()[0][0]);
     glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "proj"), 1, GL_FALSE, &m_camera.getProjMatrix()[0][0]);
-    glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
 
     glBindVertexArray(m_cubeVAO);
     for (const auto& prop : m_props) {
@@ -415,6 +318,17 @@ void Realtime::paintGL() {
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"), 1, &prop.color[0]);
         glm::vec3 emissive = prop.color * prop.emissiveStrength;
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"), 1, &emissive[0]);
+
+        // ** TEXTURE LOGIC **
+        if (prop.textureID != 0) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, prop.textureID);
+            glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 1);
+            glUniform1i(glGetUniformLocation(m_gbufferShader, "textureSampler"), 0);
+        } else {
+            glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+        }
+
         glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
     }
     glBindVertexArray(0);
@@ -422,7 +336,6 @@ void Realtime::paintGL() {
 
     // --- PHASE 2: LIGHTING PASS ---
     glDisable(GL_DEPTH_TEST);
-
     glBindFramebuffer(GL_FRAMEBUFFER, m_lightingFBO);
     glViewport(0, 0, w, h);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -436,13 +349,11 @@ void Realtime::paintGL() {
     glUniform1i(glGetUniformLocation(m_deferredShader, "gNormal"), 1);
     glUniform1i(glGetUniformLocation(m_deferredShader, "gAlbedo"), 2);
     glUniform1i(glGetUniformLocation(m_deferredShader, "gEmissive"), 3);
-
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
 
-    // ** SEND LIGHTS **
     int numLights = std::min((int)m_lights.size(), 100);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
-    glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.5f); // Max Specular
+    glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.5f);
 
     for(int i=0; i<numLights; i++) {
         std::string base = "lights[" + std::to_string(i) + "]";
@@ -455,7 +366,7 @@ void Realtime::paintGL() {
     glDrawArrays(GL_TRIANGLES, 0, 6);
     GL_CHECK();
 
-    // --- PHASE 3: BLUR PASS ---
+    // --- PHASE 3: BLUR ---
     bool horizontal = true;
     glUseProgram(m_blurShader);
     for (int i = 0; i < 10; i++) {
@@ -472,25 +383,18 @@ void Realtime::paintGL() {
     glBindFramebuffer(GL_FRAMEBUFFER, m_defaultFBO);
     glViewport(0, 0, w, h);
     glClear(GL_COLOR_BUFFER_BIT);
-
     glUseProgram(m_compositeShader);
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, m_lightingTexture);
     glUniform1i(glGetUniformLocation(m_compositeShader, "scene"), 0);
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_pingpongColorbuffers[!horizontal]);
     glUniform1i(glGetUniformLocation(m_compositeShader, "bloomBlur"), 1);
     glUniform1f(glGetUniformLocation(m_compositeShader, "exposure"), 1.2f);
-
     glBindVertexArray(m_quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
     GL_CHECK();
-
     glEnable(GL_DEPTH_TEST);
 }
 
-// ----------------------------------------------------------------
-// BOILERPLATE
-// ----------------------------------------------------------------
 void Realtime::resizeGL(int w, int h) {
     if(w<=0||h<=0) return;
     glViewport(0,0,w,h);

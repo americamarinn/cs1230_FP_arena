@@ -37,10 +37,7 @@ protected:
     void initializeGL() override;
     void paintGL() override;
     void resizeGL(int w, int h) override;
-
-    // *** THIS IS THE KEY FUNCTION FOR ANIMATION ***
     void timerEvent(QTimerEvent*) override;
-
     void keyPressEvent(QKeyEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
@@ -49,7 +46,7 @@ protected:
 private:
     // --- CORE & INPUT ---
     QElapsedTimer m_elapsedTimer;
-    int m_timer; // Timer ID
+    int m_timer;
     bool m_mouseDown = false;
     glm::vec2 m_prevMousePos;
     std::unordered_map<int, bool> m_keyMap;
@@ -89,21 +86,20 @@ private:
         glm::vec3 scale;
         glm::vec3 color;
         float emissiveStrength;
+        GLuint textureID; // <--- NEW: Stores which texture to use (0 = None)
     };
     std::vector<ArenaProp> m_props;
 
-    // *** PHYSICS LIGHT STRUCT ***
+    // Lights
     struct SimpleLight {
         glm::vec3 pos;
-        glm::vec3 vel;   // Velocity (Speed + Direction)
+        glm::vec3 vel;
         glm::vec3 color;
-        float radius;    // 0.0 = Dynamic Bouncing Light
+        float radius;
     };
     std::vector<SimpleLight> m_lights;
 
-    // *** MAZE COLLISION MAP ***
-    // 60x60 Grid to store where walls are
-    // 1 = Wall, 0 = Empty
+    // Collision Data
     std::vector<std::vector<int>> m_mazeGrid;
     const int GRID_SIZE = 60;
     const float GRID_SCALE = 1.0f;
@@ -119,12 +115,14 @@ private:
     int m_terrainNumVerts = 0;
 
     GLuint m_grassDiffuseTex = 0;
+    GLuint m_wallTexture = 0; // <--- NEW: Handle for the wall texture
+
     SnakeGame m_snake;
 
     // --- HELPERS ---
     void buildNeonScene();
-    void updateLightPhysics(); // Calculates bounces
-    void drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale);
+    void updateLightPhysics();
+    void drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID); // Updated Arg
 
     void initCube();
     void initQuad();

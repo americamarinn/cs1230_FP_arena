@@ -86,6 +86,7 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
         resources/textures/grass_color.jpg
         resources/textures/grass_height.jpg
         resources/textures/start_screen.jpg
+        resources/textures/wall_texture.jpg
 
         # deffered rendering pipeline shaders
         resources/shaders/blur.frag
