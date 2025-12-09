@@ -124,6 +124,7 @@ private:
 
     // --- HELPERS ---
     void buildNeonScene();
+    void drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale);
     void initCube();
     void initQuad();
     void initTerrain();

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include "utils/debug.h"
-#include <cstdlib> // For rand()
+#include <cstdlib>
 
 // --- DEBUG HELPER ---
 void checkFramebufferStatus() {
@@ -17,8 +17,9 @@ void checkFramebufferStatus() {
 
 Realtime::Realtime(QWidget *parent)
     : QOpenGLWidget(parent), m_mouseDown(false),
-    m_camPos(0.f, 45.f, 40.f), // High up camera looking down
-    m_camLook(0.f, -0.9f, -0.5f),
+    // Camera: Spectator View
+    m_camPos(0.f, 45.f, 55.f),
+    m_camLook(0.f, -0.6f, -0.8f),
     m_camUp(0.f, 1.f, 0.f),
     m_gameState(START_SCREEN)
 {
@@ -61,7 +62,7 @@ void Realtime::initializeGL() {
     m_blurShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/blur.frag");
     m_compositeShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/composite.frag");
 
-    // 3. Init Lighting FBO (High Precision RGBA16F)
+    // 3. Init Lighting FBO
     glGenFramebuffers(1, &m_lightingFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_lightingFBO);
     glGenTextures(1, &m_lightingTexture);
@@ -74,7 +75,7 @@ void Realtime::initializeGL() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_lightingTexture, 0);
     checkFramebufferStatus();
 
-    // 4. Init Ping-Pong FBOs (Blur)
+    // 4. Init Ping-Pong FBOs
     glGenFramebuffers(2, m_pingpongFBO);
     glGenTextures(2, m_pingpongColorbuffers);
     for (unsigned int i = 0; i < 2; i++) {
@@ -92,17 +93,15 @@ void Realtime::initializeGL() {
     // 5. Init Geometry & Resources
     initCube();
     initQuad();
-    initTerrain(); // Stub
+    initTerrain();
 
     m_grassDiffuseTex = loadTexture2D("resources/textures/grass_color.jpg");
     m_startTexture = loadTexture2D("resources/textures/start_screen.jpg");
 
-    // BUILD THE NEON WORLD
     buildNeonScene();
-
     m_snake.init();
 
-    // Camera
+    // Camera Init
     m_camera.setViewMatrix(m_camPos, m_camLook, glm::vec3(0,1,0));
     float aspect = (float)width() / (float)height();
     m_camera.setProjectionMatrix(aspect, 0.1f, 100.f, glm::radians(45.f));
@@ -112,89 +111,145 @@ void Realtime::initializeGL() {
 }
 
 // ----------------------------------------------------------------
-// DESIGNING THE "NEON SLITHER" ARENA
+// VOXEL TEXT GENERATOR
+// ----------------------------------------------------------------
+void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale) {
+    std::unordered_map<char, std::vector<std::string>> font = {
+        {'C', {"###", "#..", "#..", "#..", "###"}},
+        {'S', {"###", "#..", "###", "..#", "###"}},
+        {'1', {".#.", "##.", ".#.", ".#.", "###"}},
+        {'2', {"###", "..#", "###", "#..", "###"}},
+        {'3', {"###", "..#", "###", "..#", "###"}},
+        {'0', {"###", "#.#", "#.#", "#.#", "###"}},
+        {'F', {"###", "#..", "###", "#..", "#.."}},
+        {'P', {"###", "#.#", "###", "#..", "#.."}},
+        {'O', {"###", "#.#", "#.#", "#.#", "###"}},
+        {'R', {"###", "#.#", "##.", "#.#", "#.#"}},
+        {'E', {"###", "#..", "###", "#..", "###"}},
+        {':', {"...", ".#.", "...", ".#.", "..."}},
+        {' ', {"...", "...", "...", "...", "..."}}
+    };
+
+    float spacing = 4.0f * scale;
+
+    for (char c : text) {
+        if (font.find(c) != font.end()) {
+            auto bitmap = font[c];
+            for (int y = 0; y < 5; y++) {
+                for (int x = 0; x < 3; x++) {
+                    if (bitmap[y][x] == '#') {
+                        // Text drawn flat on the ground (X/Z plane)
+                        glm::vec3 pos = startPos + glm::vec3(x * scale, 0, (y) * scale);
+                        m_props.push_back({ pos, glm::vec3(scale, 0.1f, scale), color, 4.0f });
+                    }
+                }
+            }
+        }
+        startPos.x += spacing;
+    }
+}
+
+// ----------------------------------------------------------------
+// DESIGNING THE "CONNECTED MAZE WITH JUMPABLE WALLS"
 // ----------------------------------------------------------------
 void Realtime::buildNeonScene() {
     m_props.clear();
     m_lights.clear();
 
     // --- SETTINGS ---
-    int arenaSize = 20; // 40x40 Grid
-    int numObstacles = 45;
-    glm::vec3 cFloor(0.05f, 0.05f, 0.08f); // Deep space floor
+    const int RADIUS = 28;
+    const float WALL_H_TALL = 4.0f;  // Standard wall
+    const float WALL_H_SHORT = 1.0f; // Jumpable wall
+    const float OUTER_THICK = 2.5f;
+    const float INNER_THICK = 1.2f;  // Thin maze walls
 
-    // Helper: Rainbow function
-    auto getRainbowColor = [](float t) {
-        return glm::vec3(
-            0.5f + 0.5f * std::sin(t * 0.2f + 0.0f),
-            0.5f + 0.5f * std::sin(t * 0.2f + 2.0f),
-            0.5f + 0.5f * std::sin(t * 0.2f + 4.0f)
-            );
-    };
+    const glm::vec3 cFloor(0.05f, 0.05f, 0.08f);
 
-    // 1. THE FLOOR
-    for(int x = -arenaSize + 1; x < arenaSize; x++) {
-        for(int z = -arenaSize + 1; z < arenaSize; z++) {
-            float brightness = ((x + z) % 2 == 0) ? 1.0f : 0.8f;
+    // 1. FLOOR
+    for(int x = -RADIUS - 4; x <= RADIUS + 4; x+=2) {
+        for(int z = -RADIUS - 4; z <= RADIUS + 4; z+=2) {
+            float brightness = ((x/2 + z/2) % 2 == 0) ? 1.0f : 0.85f;
             m_props.push_back({
                 glm::vec3(x, -0.6f, z),
-                glm::vec3(0.95f, 0.1f, 0.95f), // Gaps for grid lines
-                cFloor * brightness,
-                0.0f // No glow
+                glm::vec3(1.9f, 0.1f, 1.9f),
+                cFloor * brightness, 0.0f
             });
         }
     }
 
-    // 2. RAINBOW WALLS (Tall & Glowing)
-    float wallHeight = 3.0f;
-    for(int i = -arenaSize; i <= arenaSize; i++) {
-        glm::vec3 color = getRainbowColor((float)i);
-        // Top/Bottom
-        m_props.push_back({ glm::vec3(i, 0.5f, -arenaSize), glm::vec3(1, wallHeight, 1), color, 2.0f });
-        m_props.push_back({ glm::vec3(i, 0.5f,  arenaSize), glm::vec3(1, wallHeight, 1), color, 2.0f });
-        // Left/Right
-        m_props.push_back({ glm::vec3(-arenaSize, 0.5f, i), glm::vec3(1, wallHeight, 1), color, 2.0f });
-        m_props.push_back({ glm::vec3( arenaSize, 0.5f, i), glm::vec3(1, wallHeight, 1), color, 2.0f });
+    // 2. OUTER BORDER (Thick & Tall)
+    glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
+    // Top & Bottom
+    m_props.push_back({ glm::vec3(0, WALL_H_TALL/2.0f, -RADIUS), glm::vec3(RADIUS*2, WALL_H_TALL, OUTER_THICK), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(0, WALL_H_TALL/2.0f,  RADIUS), glm::vec3(RADIUS*2, WALL_H_TALL, OUTER_THICK), cBorder, 2.0f });
+    // Left & Right
+    m_props.push_back({ glm::vec3(-RADIUS, WALL_H_TALL/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H_TALL, RADIUS*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3( RADIUS, WALL_H_TALL/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H_TALL, RADIUS*2), cBorder, 2.0f });
+
+    // Perimeter Lights
+    for(int i = -RADIUS; i <= RADIUS; i+=10) {
+        m_lights.push_back({ glm::vec3(i, 5.0f, -RADIUS+2), cBorder, 15.0f });
+        m_lights.push_back({ glm::vec3(i, 5.0f,  RADIUS-2), cBorder, 15.0f });
     }
 
-    // 3. RANDOM NEON OBSTACLES
-    srand(1234);
-    for(int i = 0; i < numObstacles; i++) {
-        int rx = (rand() % (2 * arenaSize - 4)) - (arenaSize - 2);
-        int rz = (rand() % (2 * arenaSize - 4)) - (arenaSize - 2);
+    // 3. CONNECTED MAZE GENERATION
+    srand(999); // New seed for better connections
+    auto getRainbow = [](float t) {
+        return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
+    };
 
-        // Avoid center spawn
-        if (abs(rx) < 4 && abs(rz) < 4) continue;
+    int spacing = 10; // Good balance of width and complexity
 
-        float h = 1.0f + (rand() % 40) / 10.0f; // Height 1.0 - 5.0
-        glm::vec3 obsColor = getRainbowColor((float)(rx * rz));
+    // Iterate through grid points in top-left quadrant
+    for (int x = 4; x < RADIUS - spacing/2; x += spacing) {
+        for (int z = 4; z < RADIUS - spacing/2; z += spacing) {
 
-        m_props.push_back({
-            glm::vec3(rx, h/2.0f - 0.5f, rz),
-            glm::vec3(0.8f, h, 0.8f),
-            obsColor,
-            1.5f
-        });
+            glm::vec3 color = getRainbow(x * 0.1f + z * 0.1f);
 
-        // Add lights to some obstacles
-        if (i % 5 == 0) {
-            m_lights.push_back({ glm::vec3(rx, 1.0f, rz), obsColor, 4.0f });
+            // --- DECISION 1: Connect East (along X)? ---
+            if (rand() % 100 < 60) { // 60% chance to build X-wall
+                // Decide Height: 30% short, 70% tall
+                float h = (rand() % 100 < 30) ? WALL_H_SHORT : WALL_H_TALL;
+
+                // The wall spans from current x to next x (length = spacing)
+                // We add slight overlap (+0.2) to ensure corners connect smoothly
+                glm::vec3 scale(spacing + 0.2f, h, INNER_THICK);
+                // Position is midway between grid points
+                glm::vec3 pos(x + spacing/2.0f, h/2.0f - 0.5f, z);
+
+                // Mirror 4 ways
+                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, color, 1.5f });
+            }
+
+            // --- DECISION 2: Connect South (along Z)? ---
+            if (rand() % 100 < 60) { // 60% chance to build Z-wall
+                // Decide Height: 30% short, 70% tall
+                float h = (rand() % 100 < 30) ? WALL_H_SHORT : WALL_H_TALL;
+
+                // The wall spans from current z to next z
+                glm::vec3 scale(INNER_THICK, h, spacing + 0.2f);
+                glm::vec3 pos(x, h/2.0f - 0.5f, z + spacing/2.0f);
+
+                // Mirror 4 ways
+                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, color, 1.5f });
+            }
+
+            // Occasional junction light
+            if ((rand() % 100) < 10) {
+                m_lights.push_back({ glm::vec3(x, 5.0f, z), color, 8.0f });
+            }
         }
     }
 
-    // 4. THE SNAKE (Static Demo)
-    glm::vec3 cSnake(0.1f, 1.0f, 0.8f); // Cyan
-    std::vector<glm::vec3> snakePos = {{0,0,0}, {-1,0,0}, {-2,0,0}, {-3,0,0}};
-    for(const auto& pos : snakePos) {
-        m_props.push_back({ pos, glm::vec3(0.9f), cSnake, 3.0f }); // Bright Glow
-        m_lights.push_back({ pos + glm::vec3(0, 0.5f, 0), cSnake, 3.0f });
-    }
-
-    // 5. THE APPLE
-    glm::vec3 applePos(5, 0, 5);
-    glm::vec3 cApple(1.0f, 0.2f, 0.5f); // Hot Pink
-    m_props.push_back({ applePos, glm::vec3(0.7f), cApple, 5.0f }); // SUPER GLOW
-    m_lights.push_back({ applePos + glm::vec3(0, 0.5f, 0), cApple, 5.0f });
+    // 4. TITLE TEXT (Outside)
+    drawVoxelText(glm::vec3(-22.0f, 0.0f, -RADIUS - 8.0f), "CS1230", glm::vec3(0,1,1), 2.5f);
+    drawVoxelText(glm::vec3(12.0f, 0.0f, -RADIUS - 8.0f), "FP", glm::vec3(1,0,1), 2.5f);
 }
 
 // ----------------------------------------------------------------
@@ -220,12 +275,10 @@ void Realtime::paintGL() {
             glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_startTexture);
             glUniform1i(glGetUniformLocation(m_compositeShader, "bloomBlur"), 1);
             glUniform1f(glGetUniformLocation(m_compositeShader, "exposure"), 1.0f);
-
             glBindVertexArray(m_quadVAO);
             glDrawArrays(GL_TRIANGLES, 0, 6);
-            glBindVertexArray(0);
         } else {
-            glClearColor(1.0f, 0.0f, 1.0f, 1.0f); // Fallback Pink
+            glClearColor(1.0f, 0.0f, 1.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
         }
         return;
@@ -272,6 +325,7 @@ void Realtime::paintGL() {
     glUniform1i(glGetUniformLocation(m_deferredShader, "gEmissive"), 3);
 
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
+
     int numLights = std::min((int)m_lights.size(), 8);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
     for(int i=0; i<numLights; i++) {
@@ -279,7 +333,7 @@ void Realtime::paintGL() {
         glUniform1i(glGetUniformLocation(m_deferredShader, (base + ".type").c_str()), 0);
         glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".pos").c_str()), 1, &m_lights[i].pos[0]);
         glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".color").c_str()), 1, &m_lights[i].color[0]);
-        glUniform3f(glGetUniformLocation(m_deferredShader, (base + ".atten").c_str()), 0.5f, 0.5f, 0.1f);
+        glUniform3f(glGetUniformLocation(m_deferredShader, (base + ".atten").c_str()), 0.1f, 0.05f, 0.005f);
     }
     glBindVertexArray(m_quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -308,8 +362,6 @@ void Realtime::paintGL() {
     glUniform1i(glGetUniformLocation(m_compositeShader, "scene"), 0);
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, m_pingpongColorbuffers[!horizontal]);
     glUniform1i(glGetUniformLocation(m_compositeShader, "bloomBlur"), 1);
-
-    // Increased exposure for "Slither" glow
     glUniform1f(glGetUniformLocation(m_compositeShader, "exposure"), 1.2f);
 
     glBindVertexArray(m_quadVAO);
@@ -393,8 +445,6 @@ void Realtime::mouseMoveEvent(QMouseEvent *e) {
 }
 // Stubs
 void Realtime::sceneChanged(){} void Realtime::settingsChanged(){} void Realtime::saveViewportImage(const std::string&){} void Realtime::timerEvent(QTimerEvent*){} void Realtime::initTerrain(){}
-
-
 
 
 
