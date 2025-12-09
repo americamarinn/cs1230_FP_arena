@@ -47,7 +47,7 @@ void Realtime::initializeGL() {
     glewInit();
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+    glClearColor(0.01f, 0.01f, 0.01f, 1.0f); // Pitch Black Background
 
     int w = size().width() * devicePixelRatio();
     int h = size().height() * devicePixelRatio();
@@ -115,20 +115,15 @@ void Realtime::initializeGL() {
 // ----------------------------------------------------------------
 void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale) {
     std::unordered_map<char, std::vector<std::string>> font = {
-        {'C', {"###", "#..", "#..", "#..", "###"}},
-        {'S', {"###", "#..", "###", "..#", "###"}},
-        {'1', {".#.", "##.", ".#.", ".#.", "###"}},
-        {'2', {"###", "..#", "###", "#..", "###"}},
-        {'3', {"###", "..#", "###", "..#", "###"}},
-        {'0', {"###", "#.#", "#.#", "#.#", "###"}},
-        {'F', {"###", "#..", "###", "#..", "#.."}},
-        {'P', {"###", "#.#", "###", "#..", "#.."}},
-        {'O', {"###", "#.#", "#.#", "#.#", "###"}},
-        {'R', {"###", "#.#", "##.", "#.#", "#.#"}},
-        {'E', {"###", "#..", "###", "#..", "###"}},
-        {':', {"...", ".#.", "...", ".#.", "..."}},
-        {' ', {"...", "...", "...", "...", "..."}}
-    };
+                                                               {'C', {"###", "#..", "#..", "#..", "###"}},
+                                                               {'S', {"###", "#..", "###", "..#", "###"}},
+                                                               {'1', {".#.", "##.", ".#.", ".#.", "###"}},
+                                                               {'2', {"###", "..#", "###", "#..", "###"}},
+                                                               {'3', {"###", "..#", "###", "..#", "###"}},
+                                                               {'0', {"###", "#.#", "#.#", "#.#", "###"}},
+                                                               {'F', {"###", "#..", "###", "#..", "#.."}},
+                                                               {'P', {"###", "#.#", "###", "#..", "#.."}},
+                                                               };
 
     float spacing = 4.0f * scale;
 
@@ -138,7 +133,7 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
             for (int y = 0; y < 5; y++) {
                 for (int x = 0; x < 3; x++) {
                     if (bitmap[y][x] == '#') {
-                        // Text drawn flat on the ground (X/Z plane)
+                        // Flat text
                         glm::vec3 pos = startPos + glm::vec3(x * scale, 0, (y) * scale);
                         m_props.push_back({ pos, glm::vec3(scale, 0.1f, scale), color, 4.0f });
                     }
@@ -150,7 +145,7 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
 }
 
 // ----------------------------------------------------------------
-// DESIGNING THE "CONNECTED MAZE WITH JUMPABLE WALLS"
+// DESIGNING THE "BOUNCING LIGHT MAZE"
 // ----------------------------------------------------------------
 void Realtime::buildNeonScene() {
     m_props.clear();
@@ -158,98 +153,85 @@ void Realtime::buildNeonScene() {
 
     // --- SETTINGS ---
     const int RADIUS = 28;
-    const float WALL_H_TALL = 4.0f;  // Standard wall
-    const float WALL_H_SHORT = 1.0f; // Jumpable wall
-    const float OUTER_THICK = 2.5f;
-    const float INNER_THICK = 1.2f;  // Thin maze walls
+    const float WALL_H = 3.5f;
+    const float OUTER_THICK = 2.0f;
+    const float INNER_THICK = 0.8f;
 
-    const glm::vec3 cFloor(0.05f, 0.05f, 0.08f);
+    // PITCH BLACK FLOOR (For Reflections)
+    const glm::vec3 cFloor(0.0f, 0.0f, 0.0f);
 
     // 1. FLOOR
     for(int x = -RADIUS - 4; x <= RADIUS + 4; x+=2) {
         for(int z = -RADIUS - 4; z <= RADIUS + 4; z+=2) {
-            float brightness = ((x/2 + z/2) % 2 == 0) ? 1.0f : 0.85f;
+            float brightness = ((x/2 + z/2) % 2 == 0) ? 0.8f : 0.6f;
             m_props.push_back({
                 glm::vec3(x, -0.6f, z),
                 glm::vec3(1.9f, 0.1f, 1.9f),
-                cFloor * brightness, 0.0f
+                cFloor + glm::vec3(0.02f) * brightness, // Subtle grid
+                0.0f
             });
         }
     }
 
-    // 2. OUTER BORDER (Thick & Tall)
+    // 2. OUTER BORDER (Cyan Frame)
     glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
-    // Top & Bottom
-    m_props.push_back({ glm::vec3(0, WALL_H_TALL/2.0f, -RADIUS), glm::vec3(RADIUS*2, WALL_H_TALL, OUTER_THICK), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(0, WALL_H_TALL/2.0f,  RADIUS), glm::vec3(RADIUS*2, WALL_H_TALL, OUTER_THICK), cBorder, 2.0f });
-    // Left & Right
-    m_props.push_back({ glm::vec3(-RADIUS, WALL_H_TALL/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H_TALL, RADIUS*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3( RADIUS, WALL_H_TALL/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H_TALL, RADIUS*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(0, WALL_H/2.0f, -RADIUS), glm::vec3(RADIUS*2, WALL_H, OUTER_THICK), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(0, WALL_H/2.0f,  RADIUS), glm::vec3(RADIUS*2, WALL_H, OUTER_THICK), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(-RADIUS, WALL_H/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H, RADIUS*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3( RADIUS, WALL_H/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H, RADIUS*2), cBorder, 2.0f });
 
-    // Perimeter Lights
-    for(int i = -RADIUS; i <= RADIUS; i+=10) {
-        m_lights.push_back({ glm::vec3(i, 5.0f, -RADIUS+2), cBorder, 15.0f });
-        m_lights.push_back({ glm::vec3(i, 5.0f,  RADIUS-2), cBorder, 15.0f });
-    }
-
-    // 3. CONNECTED MAZE GENERATION
-    srand(999); // New seed for better connections
+    // 3. DARK GLASS MAZE
+    srand(555);
     auto getRainbow = [](float t) {
         return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
     };
 
-    int spacing = 10; // Good balance of width and complexity
+    int spacing = 6;
 
-    // Iterate through grid points in top-left quadrant
     for (int x = 4; x < RADIUS - spacing/2; x += spacing) {
         for (int z = 4; z < RADIUS - spacing/2; z += spacing) {
 
             glm::vec3 color = getRainbow(x * 0.1f + z * 0.1f);
 
-            // --- DECISION 1: Connect East (along X)? ---
-            if (rand() % 100 < 60) { // 60% chance to build X-wall
-                // Decide Height: 30% short, 70% tall
-                float h = (rand() % 100 < 30) ? WALL_H_SHORT : WALL_H_TALL;
+            // "DARK GLASS": Black body (0.01), Bright edges (emissive 3.0)
+            glm::vec3 glassColor = glm::vec3(0.02f);
 
-                // The wall spans from current x to next x (length = spacing)
-                // We add slight overlap (+0.2) to ensure corners connect smoothly
-                glm::vec3 scale(spacing + 0.2f, h, INNER_THICK);
-                // Position is midway between grid points
-                glm::vec3 pos(x + spacing/2.0f, h/2.0f - 0.5f, z);
+            // X-Connection (Wall)
+            if (rand() % 100 < 50) {
+                glm::vec3 scale(spacing + 0.2f, WALL_H, INNER_THICK);
+                glm::vec3 pos(x + spacing/2.0f, WALL_H/2.0f - 0.5f, z);
 
-                // Mirror 4 ways
-                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, color, 1.5f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, glassColor, 3.0f });
             }
 
-            // --- DECISION 2: Connect South (along Z)? ---
-            if (rand() % 100 < 60) { // 60% chance to build Z-wall
-                // Decide Height: 30% short, 70% tall
-                float h = (rand() % 100 < 30) ? WALL_H_SHORT : WALL_H_TALL;
+            // Z-Connection (Wall)
+            if (rand() % 100 < 50) {
+                glm::vec3 scale(INNER_THICK, WALL_H, spacing + 0.2f);
+                glm::vec3 pos(x, WALL_H/2.0f - 0.5f, z + spacing/2.0f);
 
-                // The wall spans from current z to next z
-                glm::vec3 scale(INNER_THICK, h, spacing + 0.2f);
-                glm::vec3 pos(x, h/2.0f - 0.5f, z + spacing/2.0f);
-
-                // Mirror 4 ways
-                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, color, 1.5f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, color, 1.5f });
-            }
-
-            // Occasional junction light
-            if ((rand() % 100) < 10) {
-                m_lights.push_back({ glm::vec3(x, 5.0f, z), color, 8.0f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, glassColor, 3.0f });
+                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, glassColor, 3.0f });
             }
         }
     }
 
-    // 4. TITLE TEXT (Outside)
-    drawVoxelText(glm::vec3(-22.0f, 0.0f, -RADIUS - 8.0f), "CS1230", glm::vec3(0,1,1), 2.5f);
-    drawVoxelText(glm::vec3(12.0f, 0.0f, -RADIUS - 8.0f), "FP", glm::vec3(1,0,1), 2.5f);
+    // 4. SPAWN THE "BOUNCING" LIGHTS (Radius 0 = Dynamic Flag)
+    // We scatter 40 of them around.
+    for(int i=0; i<40; i++) {
+        // Random start positions
+        float rX = (rand() % (RADIUS*2)) - RADIUS;
+        float rZ = (rand() % (RADIUS*2)) - RADIUS;
+        glm::vec3 color = getRainbow(i * 0.5f);
+        m_lights.push_back({ glm::vec3(rX, 1.0f, rZ), color, 0.0f });
+    }
+
+    // 5. TITLE TEXT
+    drawVoxelText(glm::vec3(-25.0f, 12.0f, -RADIUS - 5.0f), "CS1230", glm::vec3(0,1,1), 2.5f);
 }
 
 // ----------------------------------------------------------------
@@ -261,6 +243,7 @@ void Realtime::paintGL() {
 
     int w = size().width() * devicePixelRatio();
     int h = size().height() * devicePixelRatio();
+    float time = m_elapsedTimer.elapsed() * 0.001f;
 
     // A. START SCREEN
     if (m_gameState == START_SCREEN) {
@@ -326,13 +309,32 @@ void Realtime::paintGL() {
 
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
 
-    int numLights = std::min((int)m_lights.size(), 8);
+    // ** ANIMATE BOUNCING LIGHTS **
+    int numLights = std::min((int)m_lights.size(), 100);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
+    glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.0f); // Max Specular!
+
     for(int i=0; i<numLights; i++) {
         std::string base = "lights[" + std::to_string(i) + "]";
+        glm::vec3 finalPos = m_lights[i].pos;
+
+        // Dynamic "Bounce" Logic
+        if (m_lights[i].radius == 0.0f) {
+            float speed = 1.0f + (i % 5) * 0.2f; // Vary speed
+            float phase = i * 13.5f; // Randomize start
+
+            // Lissajous Curve (Looks like wandering)
+            finalPos.x += sin(time * speed + phase) * 10.0f;
+            finalPos.z += cos(time * 0.8f * speed + phase) * 10.0f;
+
+            // Vertical Bob (Floating)
+            finalPos.y = 2.0f + sin(time * 2.0f + phase) * 1.0f;
+        }
+
         glUniform1i(glGetUniformLocation(m_deferredShader, (base + ".type").c_str()), 0);
-        glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".pos").c_str()), 1, &m_lights[i].pos[0]);
+        glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".pos").c_str()), 1, &finalPos[0]);
         glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".color").c_str()), 1, &m_lights[i].color[0]);
+        // Soft, wide light (0.05 attenuation)
         glUniform3f(glGetUniformLocation(m_deferredShader, (base + ".atten").c_str()), 0.1f, 0.05f, 0.005f);
     }
     glBindVertexArray(m_quadVAO);
@@ -380,16 +382,13 @@ void Realtime::resizeGL(int w, int h) {
     glViewport(0,0,w,h);
     int w_dpi = w*devicePixelRatio();
     int h_dpi = h*devicePixelRatio();
-
     m_gbuffer.resize(w_dpi, h_dpi);
-
     glBindTexture(GL_TEXTURE_2D, m_lightingTexture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w_dpi, h_dpi, 0, GL_RGBA, GL_FLOAT, NULL);
     for(int i=0; i<2; i++) {
         glBindTexture(GL_TEXTURE_2D, m_pingpongColorbuffers[i]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w_dpi, h_dpi, 0, GL_RGBA, GL_FLOAT, NULL);
     }
-
     float aspect = (float)w / (float)h;
     m_camera.setProjectionMatrix(aspect, 0.1f, 100.f, glm::radians(45.f));
 }
@@ -445,6 +444,16 @@ void Realtime::mouseMoveEvent(QMouseEvent *e) {
 }
 // Stubs
 void Realtime::sceneChanged(){} void Realtime::settingsChanged(){} void Realtime::saveViewportImage(const std::string&){} void Realtime::timerEvent(QTimerEvent*){} void Realtime::initTerrain(){}
+
+
+
+
+
+
+
+
+
+
 
 
 
