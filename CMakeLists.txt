@@ -98,20 +98,53 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
 )
 
 
-# adding textures
+# ----- Textures -----
 file(GLOB TEXTURE_FILES
-    "resources/textures/*.png"
-    "resources/textures/*.jpg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/*.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/textures/*.jpg"
 )
 
 # Make Qt Creator show textures under a named group
 source_group("projects_realtime_other_files/resources/textures" FILES ${TEXTURE_FILES})
 
+# Ensure destination directory exists
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/resources/textures")
 
-# Copy textures into the build folder so loadTexture2D() can find them
+# Copy textures one by one, preserving filenames
 foreach(tex ${TEXTURE_FILES})
-    configure_file(${tex} ${CMAKE_CURRENT_BINARY_DIR}/resources/textures COPYONLY)
+    get_filename_component(tex_name "${tex}" NAME)
+    configure_file(
+        "${tex}"
+        "${CMAKE_CURRENT_BINARY_DIR}/resources/textures/${tex_name}"
+        COPYONLY
+    )
 endforeach()
+
+
+
+# ----- Shaders -----
+file(GLOB SHADER_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/shaders/*.vert"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/shaders/*.frag"
+)
+
+# Show shaders in Qt Creator
+source_group("projects_realtime_other_files/resources/shaders" FILES ${SHADER_FILES})
+
+# Ensure destination directory exists
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/resources/shaders")
+
+# Copy shaders one by one, preserving filenames
+foreach(shader ${SHADER_FILES})
+    get_filename_component(shader_name "${shader}" NAME)
+    configure_file(
+        "${shader}"
+        "${CMAKE_CURRENT_BINARY_DIR}/resources/shaders/${shader_name}"
+        COPYONLY
+    )
+endforeach()
+
+
 
 
 # GLEW: this provides support for Windows (including 64-bit)
