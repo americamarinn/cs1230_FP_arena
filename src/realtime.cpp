@@ -17,7 +17,8 @@ void checkFramebufferStatus() {
 
 Realtime::Realtime(QWidget *parent)
     : QOpenGLWidget(parent), m_mouseDown(false),
-    m_camPos(0.f, 45.f, 55.f),
+    // Camera: Cinematic Spectator View
+    m_camPos(0.f, 50.f, 60.f),
     m_camLook(0.f, -0.6f, -0.8f),
     m_camUp(0.f, 1.f, 0.f),
     m_gameState(START_SCREEN)
@@ -46,19 +47,22 @@ void Realtime::initializeGL() {
     glewInit();
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
-    glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
+    glClearColor(0.01f, 0.01f, 0.01f, 1.0f); // Pitch Black
 
     int w = size().width() * devicePixelRatio();
     int h = size().height() * devicePixelRatio();
     m_defaultFBO = defaultFramebufferObject();
 
+    // 1. Init G-Buffer
     m_gbuffer.init(w, h);
 
+    // 2. Load Shaders
     m_gbufferShader = ShaderLoader::createShaderProgram("resources/shaders/gbuffer.vert", "resources/shaders/gbuffer.frag");
     m_deferredShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/deferredLighting.frag");
     m_blurShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/blur.frag");
     m_compositeShader = ShaderLoader::createShaderProgram("resources/shaders/fullscreen_quad.vert", "resources/shaders/composite.frag");
 
+    // 3. Init Lighting FBO
     glGenFramebuffers(1, &m_lightingFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_lightingFBO);
     glGenTextures(1, &m_lightingTexture);
@@ -71,6 +75,7 @@ void Realtime::initializeGL() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_lightingTexture, 0);
     checkFramebufferStatus();
 
+    // 4. Init Ping-Pong FBOs
     glGenFramebuffers(2, m_pingpongFBO);
     glGenTextures(2, m_pingpongColorbuffers);
     for (unsigned int i = 0; i < 2; i++) {
@@ -85,6 +90,7 @@ void Realtime::initializeGL() {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    // 5. Init Geometry & Resources
     initCube();
     initQuad();
     initTerrain();
@@ -95,23 +101,22 @@ void Realtime::initializeGL() {
     buildNeonScene();
     m_snake.init();
 
+    // Camera Init
     m_camera.setViewMatrix(m_camPos, m_camLook, glm::vec3(0,1,0));
     float aspect = (float)width() / (float)height();
     m_camera.setProjectionMatrix(aspect, 0.1f, 100.f, glm::radians(45.f));
 
     m_elapsedTimer.start();
-
-    // *** START THE TIMER HERE ***
-    m_timer = startTimer(1000/60); // 60 FPS
+    m_timer = startTimer(1000/60);
 }
 
 // ----------------------------------------------------------------
-// THE GAME LOOP (CALLED AUTOMATICALLY 60 TIMES/SEC)
+// THE GAME LOOP
 // ----------------------------------------------------------------
 void Realtime::timerEvent(QTimerEvent *event) {
     if (m_gameState == PLAYING || m_gameState == START_SCREEN) {
-        updateLightPhysics(); // Move the lights!
-        update();             // Trigger a repaint
+        updateLightPhysics();
+        update();
     }
 }
 
@@ -119,51 +124,42 @@ void Realtime::timerEvent(QTimerEvent *event) {
 // PHYSICS UPDATE: BOUNCING LIGHTS
 // ----------------------------------------------------------------
 void Realtime::updateLightPhysics() {
-    float arenaBounds = 28.0f; // Half-size of arena
+    float arenaBounds = 28.0f;
 
     for(auto& light : m_lights) {
-        if (light.radius != 0.0f) continue; // Only move dynamic lights
+        if (light.radius != 0.0f) continue; // Skip static lights
 
-        // 1. Proposed New Position
         glm::vec3 nextPos = light.pos + light.vel;
 
-        // 2. Map world position to our collision grid (0 to 60)
-        int gx = (int)(nextPos.x / GRID_SCALE) + 30; // +30 centers it (since map is -30 to 30)
+        // Map world position to our collision grid (0 to 60)
+        int gx = (int)(nextPos.x / GRID_SCALE) + 30;
         int gz = (int)(nextPos.z / GRID_SCALE) + 30;
 
         bool hit = false;
 
-        // 3. Check Arena Boundaries (Outer Walls)
+        // Check Bounds
         if (abs(nextPos.x) > arenaBounds) { light.vel.x *= -1; hit = true; }
         if (abs(nextPos.z) > arenaBounds) { light.vel.z *= -1; hit = true; }
 
-        // 4. Check Internal Maze Walls
+        // Check Maze Walls
         if (!hit && gx >= 0 && gx < GRID_SIZE && gz >= 0 && gz < GRID_SIZE) {
-            if (m_mazeGrid[gx][gz] == 1) { // Hit a wall block!
+            if (m_mazeGrid[gx][gz] == 1) {
+                // Bounce Logic
+                int prevGx = (int)(light.pos.x / GRID_SCALE) + 30;
+                int prevGz = (int)(light.pos.z / GRID_SCALE) + 30;
 
-                // Determine which side we hit by checking current position
-                int currGx = (int)(light.pos.x / GRID_SCALE) + 30;
-                int currGz = (int)(light.pos.z / GRID_SCALE) + 30;
+                if (gx != prevGx) light.vel.x *= -1;
+                else if (gz != prevGz) light.vel.z *= -1;
+                else light.vel *= -1.0f;
 
-                if (gx != currGx) {
-                    light.vel.x *= -1; // Hit side (X-bounce)
-                } else if (gz != currGz) {
-                    light.vel.z *= -1; // Hit front/back (Z-bounce)
-                } else {
-                    light.vel *= -1.0f; // Stuck inside? Reverse out.
-                }
-
-                // Add a little randomness to velocity to prevent infinite loops
-                light.vel.x += ((rand()%100)/10000.0f) - 0.005f;
                 hit = true;
             }
         }
 
-        // 5. Update Position if no hit (or after bounce logic handles direction)
         if (!hit) {
             light.pos = nextPos;
         } else {
-            light.pos += light.vel; // Move away from wall
+            light.pos += light.vel;
         }
     }
 }
@@ -202,13 +198,11 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
 }
 
 // ----------------------------------------------------------------
-// BUILD SCENE + COLLISION GRID
+// DESIGNING THE "CONTINUOUS NEON CIRCUIT"
 // ----------------------------------------------------------------
 void Realtime::buildNeonScene() {
     m_props.clear();
     m_lights.clear();
-
-    // Clear Collision Grid
     m_mazeGrid.assign(GRID_SIZE, std::vector<int>(GRID_SIZE, 0));
 
     // --- SETTINGS ---
@@ -216,112 +210,133 @@ void Realtime::buildNeonScene() {
     const float WALL_H = 3.5f;
     const float OUTER_THICK = 2.0f;
     const float INNER_THICK = 0.8f;
-
-    const glm::vec3 cFloor(0.01f, 0.01f, 0.02f);
+    const glm::vec3 cFloor(0.0f, 0.0f, 0.0f); // Pitch Black Floor
 
     // 1. FLOOR
-    for(int x = -RADIUS - 4; x <= RADIUS + 4; x+=2) {
-        for(int z = -RADIUS - 4; z <= RADIUS + 4; z+=2) {
-            float brightness = ((x/2 + z/2) % 2 == 0) ? 1.0f : 0.8f;
+    for(int x = -RADIUS - 6; x <= RADIUS + 6; x+=2) {
+        for(int z = -RADIUS - 6; z <= RADIUS + 6; z+=2) {
+            float brightness = ((x/2 + z/2) % 2 == 0) ? 0.8f : 0.6f;
             m_props.push_back({
                 glm::vec3(x, -0.6f, z),
                 glm::vec3(1.9f, 0.1f, 1.9f),
-                cFloor * brightness,
+                cFloor + glm::vec3(0.015f) * brightness,
                 0.0f
             });
         }
     }
 
-    // 2. OUTER BORDER
+    // 2. LAYERED STADIUM BORDER
     glm::vec3 cBorder(0.0f, 1.0f, 1.0f);
-    m_props.push_back({ glm::vec3(0, WALL_H/2.0f, -RADIUS), glm::vec3(RADIUS*2, WALL_H, OUTER_THICK), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(0, WALL_H/2.0f,  RADIUS), glm::vec3(RADIUS*2, WALL_H, OUTER_THICK), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3(-RADIUS, WALL_H/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H, RADIUS*2), cBorder, 2.0f });
-    m_props.push_back({ glm::vec3( RADIUS, WALL_H/2.0f, 0), glm::vec3(OUTER_THICK, WALL_H, RADIUS*2), cBorder, 2.0f });
 
-    // 3. MAZE GENERATION
-    srand(555);
+    // Layer 1: Low Inner Bumper
+    float b1 = RADIUS;
+    m_props.push_back({ glm::vec3(0, 0.5f, -b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3(0, 0.5f,  b1), glm::vec3(b1*2, 1.0f, 1.0f), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3(-b1, 0.5f, 0), glm::vec3(1.0f, 1.0f, b1*2), cBorder, 1.0f });
+    m_props.push_back({ glm::vec3( b1, 0.5f, 0), glm::vec3(1.0f, 1.0f, b1*2), cBorder, 1.0f });
+
+    // Layer 2: High Outer Wall
+    float b3 = RADIUS + 3.0f;
+    m_props.push_back({ glm::vec3(0, 3.0f, -b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(0, 3.0f,  b3), glm::vec3(b3*2, 4.0f, 1.0f), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3(-b3, 3.0f, 0), glm::vec3(1.0f, 4.0f, b3*2), cBorder, 2.0f });
+    m_props.push_back({ glm::vec3( b3, 3.0f, 0), glm::vec3(1.0f, 4.0f, b3*2), cBorder, 2.0f });
+
+
+    // 3. CONTINUOUS LINEAR MAZE
+    srand(999);
     auto getRainbow = [](float t) {
         return glm::vec3(0.5f+0.5f*sin(t), 0.5f+0.5f*sin(t+2.0f), 0.5f+0.5f*sin(t+4.0f));
     };
 
-    int spacing = 6;
+    // We draw LONG lines that are occasionally broken.
+    // Stride 10 for wide hallways
 
-    for (int x = 4; x < RADIUS - spacing/2; x += spacing) {
-        for (int z = 4; z < RADIUS - spacing/2; z += spacing) {
+    // VERTICAL LINES (Z-Axis)
+    for (int x = -RADIUS + 10; x <= RADIUS - 10; x += 10) {
+        glm::vec3 color = getRainbow(x * 0.2f);
+        glm::vec3 glassColor = color * 0.15f;
 
-            glm::vec3 color = getRainbow(x * 0.1f + z * 0.1f);
-            glm::vec3 glassColor = color * 0.15f;
+        // Draw a line from Top to Bottom, but break it into segments
+        float z = -RADIUS + 4;
+        while (z < RADIUS - 4) {
 
-            // Fill Grid Logic: (pos / 1.0) + 30 offset
+            // Random length for this wall segment (between 6 and 14)
+            float length = 6.0f + (rand() % 5) * 2.0f;
 
-            // X-Connection
-            if (rand() % 100 < 50) {
-                glm::vec3 scale(spacing + 0.2f, WALL_H, INNER_THICK);
-                glm::vec3 pos(x + spacing/2.0f, WALL_H/2.0f - 0.5f, z);
+            // Gap size (between 4 and 8)
+            float gap = 4.0f + (rand() % 3) * 2.0f;
 
-                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, glassColor, 4.0f });
+            // Ensure we don't block the center spawn area
+            if (abs(x) < 8 && abs(z + length/2) < 8) {
+                z += length + gap;
+                continue;
+            }
 
-                // Mark Wall in Collision Grid (Approximate center point)
-                // We mark a few points along the wall
-                for(int k=-spacing/2; k<=spacing/2; k++) {
-                    int gx = (int)(pos.x + k) + 30; int gz = (int)(pos.z) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
+            // Draw Wall Segment
+            if (z + length < RADIUS - 4) {
+                glm::vec3 pos(x, WALL_H/2.0f - 0.5f, z + length/2.0f);
+                glm::vec3 scale(INNER_THICK, WALL_H, length);
 
-                    gx = (int)(-pos.x + k) + 30; gz = (int)(pos.z) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
+                m_props.push_back({ pos, scale, glassColor, 4.0f });
 
-                    gx = (int)(pos.x + k) + 30; gz = (int)(-pos.z) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-
-                    gx = (int)(-pos.x + k) + 30; gz = (int)(-pos.z) + 30;
+                // Mark Collision
+                int gx = (int)(pos.x) + 30;
+                int rZ = (int)(scale.z/2.0f);
+                for(int dz = -rZ; dz <= rZ; dz++) {
+                    int gz = (int)(pos.z + dz) + 30;
                     if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
                 }
             }
-
-            // Z-Connection
-            if (rand() % 100 < 50) {
-                glm::vec3 scale(INNER_THICK, WALL_H, spacing + 0.2f);
-                glm::vec3 pos(x, WALL_H/2.0f - 0.5f, z + spacing/2.0f);
-
-                m_props.push_back({ glm::vec3(pos.x, pos.y, pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(pos.x, pos.y, -pos.z), scale, glassColor, 4.0f });
-                m_props.push_back({ glm::vec3(-pos.x, pos.y, -pos.z), scale, glassColor, 4.0f });
-
-                // Mark Wall in Collision Grid
-                for(int k=-spacing/2; k<=spacing/2; k++) {
-                    int gx = (int)(pos.x) + 30; int gz = (int)(pos.z + k) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-
-                    gx = (int)(-pos.x) + 30; gz = (int)(pos.z + k) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-
-                    gx = (int)(pos.x) + 30; gz = (int)(-pos.z + k) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-
-                    gx = (int)(-pos.x) + 30; gz = (int)(-pos.z + k) + 30;
-                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
-                }
-            }
+            z += length + gap;
         }
     }
 
-    // 4. SPAWN DYNAMIC BOUNCING LIGHTS
-    for(int i=0; i<60; i++) {
-        // Random start inside arena
+    // HORIZONTAL LINES (X-Axis) - Fewer of these to keep flow open
+    for (int z = -RADIUS + 10; z <= RADIUS - 10; z += 10) {
+        glm::vec3 color = getRainbow(z * 0.2f + 2.0f);
+        glm::vec3 glassColor = color * 0.15f;
+
+        float x = -RADIUS + 4;
+        while (x < RADIUS - 4) {
+            float length = 6.0f + (rand() % 5) * 2.0f;
+            float gap = 6.0f + (rand() % 4) * 2.0f; // Bigger gaps for X lines
+
+            if (abs(z) < 8 && abs(x + length/2) < 8) {
+                x += length + gap;
+                continue;
+            }
+
+            if (x + length < RADIUS - 4 && rand()%100 < 60) { // 60% chance to exist
+                glm::vec3 pos(x + length/2.0f, WALL_H/2.0f - 0.5f, z);
+                glm::vec3 scale(length, WALL_H, INNER_THICK);
+
+                m_props.push_back({ pos, scale, glassColor, 4.0f });
+
+                int gz = (int)(pos.z) + 30;
+                int rX = (int)(scale.x/2.0f);
+                for(int dx = -rX; dx <= rX; dx++) {
+                    int gx = (int)(pos.x + dx) + 30;
+                    if(gx>=0 && gx<60 && gz>=0 && gz<60) m_mazeGrid[gx][gz] = 1;
+                }
+            }
+            x += length + gap;
+        }
+    }
+
+    // 4. SPAWN 80 BOUNCING LIGHTS
+    for(int i=0; i<80; i++) {
         float rX = (rand() % (RADIUS*2)) - RADIUS;
         float rZ = (rand() % (RADIUS*2)) - RADIUS;
 
-        // Random Velocity (Slow but steady)
-        float vx = ((rand() % 100) / 100.0f - 0.5f) * 0.15f;
-        float vz = ((rand() % 100) / 100.0f - 0.5f) * 0.15f;
-        if (abs(vx) < 0.02f) vx = 0.05f; // Prevent stillness
+        int gx = (int)(rX) + 30; int gz = (int)(rZ) + 30;
+        if(gx >=0 && gx<60 && gz>=0 && gz<60 && m_mazeGrid[gx][gz] == 1) continue;
 
-        glm::vec3 color = getRainbow(i * 0.5f);
+        float vx = ((rand() % 100) / 100.0f - 0.5f) * 0.3f;
+        float vz = ((rand() % 100) / 100.0f - 0.5f) * 0.3f;
+        if (abs(vx) < 0.05f) vx = 0.1f;
+
+        glm::vec3 color = getRainbow(i * 0.3f);
         m_lights.push_back({ glm::vec3(rX, 1.5f, rZ), glm::vec3(vx, 0, vz), color, 0.0f });
     }
 
@@ -334,9 +349,6 @@ void Realtime::buildNeonScene() {
 // ----------------------------------------------------------------
 void Realtime::paintGL() {
     m_defaultFBO = defaultFramebufferObject();
-
-    // Physics is now called by timerEvent, but we can double check here
-    // However, for smooth animation, timerEvent is best.
 
     while (glGetError() != GL_NO_ERROR);
 
@@ -407,14 +419,13 @@ void Realtime::paintGL() {
 
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
 
-    // ** SEND LIGHTS (UPDATED BY PHYSICS) **
+    // ** SEND LIGHTS **
     int numLights = std::min((int)m_lights.size(), 100);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
-    glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.0f);
+    glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.5f); // Max Specular
 
     for(int i=0; i<numLights; i++) {
         std::string base = "lights[" + std::to_string(i) + "]";
-
         glUniform1i(glGetUniformLocation(m_deferredShader, (base + ".type").c_str()), 0);
         glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".pos").c_str()), 1, &m_lights[i].pos[0]);
         glUniform3fv(glGetUniformLocation(m_deferredShader, (base + ".color").c_str()), 1, &m_lights[i].color[0]);
