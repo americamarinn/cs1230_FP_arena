@@ -109,7 +109,7 @@ void Realtime::initializeGL() {
     m_snakeMass       = 1.0f;
     m_snakeForceMag   = 110.0f;
     m_snakeFriction   = 8.0f;
-    m_snakeMaxSpeed   = 10.0f;
+    m_snakeMaxSpeed   = 12.0f;
 
     m_snakeJumpOffset  = 0.0f;
     m_snakeJumpVel     = 0.0f;
@@ -131,6 +131,23 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Delta time
     float deltaTime = m_elapsedTimer.elapsed() * 0.001f;
     m_elapsedTimer.restart();
+
+    // --- Power-up timers ---
+    if (m_speedBoostActive) {
+        m_speedBoostTimer -= deltaTime;
+        if (m_speedBoostTimer <= 0.f) {
+            m_speedBoostActive = false;
+            m_speedBoostTimer  = 0.f;
+        }
+    }
+
+    if (m_jumpBoostActive) {
+        m_jumpBoostTimer -= deltaTime;
+        if (m_jumpBoostTimer <= 0.f) {
+            m_jumpBoostActive = false;
+            m_jumpBoostTimer  = 0.f;
+        }
+    }
 
     // Lights keep bouncing
     updateLightPhysics();
@@ -160,10 +177,15 @@ void Realtime::timerEvent(QTimerEvent *event) {
     glm::vec3 a = F_total / m_snakeMass;
     m_snakeState.vel += a * deltaTime;
 
-    // Clamp speed
+    // Clamp speed (with possible boost)
+    float maxSpeed = m_snakeMaxSpeed;
+    if (m_speedBoostActive) {
+        maxSpeed *= 1.8f;   //
+    }
+
     float speed = glm::length(m_snakeState.vel);
-    if (speed > m_snakeMaxSpeed) {
-        m_snakeState.vel = (m_snakeState.vel / speed) * m_snakeMaxSpeed;
+    if (speed > maxSpeed) {
+        m_snakeState.vel = (m_snakeState.vel / speed) * maxSpeed;
     }
 
     // Integrate position on XZ plane
@@ -212,12 +234,26 @@ void Realtime::timerEvent(QTimerEvent *event) {
     if (m_hasFood) {
         float d = glm::length(m_snakeState.pos - m_foodPos);
         if (d < m_foodRadius) {
-            // Grow: add one new body segment
+
+            // All food types still grow the snake a bit
             glm::vec3 newSeg = m_snakeState.pos;
             if (!m_snakeBody.empty()) {
                 newSeg = m_snakeBody.back();
             }
             m_snakeBody.push_back(newSeg);
+
+            // Apply effect based on type
+            if (m_foodType == FOOD_NORMAL) {
+                // Just growth (already done above)
+            }
+            else if (m_foodType == FOOD_SPEED) {
+                m_speedBoostActive = true;
+                m_speedBoostTimer  = m_speedBoostDuration;
+            }
+            else if (m_foodType == FOOD_JUMP) {
+                m_jumpBoostActive = true;
+                m_jumpBoostTimer  = m_jumpBoostDuration;
+            }
 
             m_hasFood = false;
             spawnFood();
@@ -433,6 +469,8 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
         startPos.x += spacing;
     }
 }
+
+
 
 void Realtime::buildNeonScene() {
     m_props.clear();
@@ -701,8 +739,25 @@ void Realtime::paintGL() {
                            1, GL_FALSE, &foodModel[0][0]);
 
         // Soft glowing green-yellow
-        glm::vec3 foodColor    = glm::vec3(0.25f, 0.30f, 0.10f);
-        glm::vec3 foodEmissive = glm::vec3(0.25f, 0.36f, 0.15f); // strong glow
+        // Pick color based on type
+        glm::vec3 foodColor;
+        glm::vec3 foodEmissive;
+
+        if (m_foodType == FOOD_NORMAL) {
+            // Dirty green-yellow (classic)
+            foodColor    = glm::vec3(0.25f, 0.30f, 0.10f);
+            foodEmissive = glm::vec3(0.20f, 0.30f, 0.12f);
+        }
+        else if (m_foodType == FOOD_SPEED) {
+            // Electric cyan-ish
+            foodColor    = glm::vec3(0.0f, 0.7f, 1.0f);
+            foodEmissive = glm::vec3(0.0f, 1.4f, 2.0f);
+        }
+        else { // FOOD_JUMP
+            // Neon purple
+            foodColor    = glm::vec3(0.7f, 0.25f, 0.9f);
+            foodEmissive = glm::vec3(1.4f, 0.5f, 1.8f);
+        }
 
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),
                      1, &foodColor[0]);
@@ -711,10 +766,11 @@ void Realtime::paintGL() {
 
         glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
 
-        // No lighting interaction
+        // no specular so it glows instead of looking plasticky
         glUniform1f(glGetUniformLocation(m_gbufferShader, "k_d"), 0.0f);
         glUniform1f(glGetUniformLocation(m_gbufferShader, "k_s"), 0.0f);
         glUniform1f(glGetUniformLocation(m_gbufferShader, "shininess"), 1.0f);
+
 
         glBindVertexArray(m_sphereVAO);
         glDrawArrays(GL_TRIANGLES, 0, m_sphereNumVerts);
@@ -768,6 +824,20 @@ void Realtime::paintGL() {
     glUniform3fv(glGetUniformLocation(m_deferredShader, "camPos"), 1, &m_camera.getPosition()[0]);
     int numLights = std::min((int)m_lights.size(), 100);
     glUniform1i(glGetUniformLocation(m_deferredShader, "numLights"), numLights);
+
+    // --- Fog uniforms (NEW) ---
+    // arena radius ≈ 28, so start just before the wall and fade outwards
+    float fogStart = 26.0f;  // radius where fog starts to appear
+    float fogEnd   = 40.0f;  // fully fogged
+
+    glm::vec3 fogCol(0.05f, 0.06f, 0.10f); // dark bluish club fog;
+    // You can also match your glClearColor if you want
+
+    glUniform1f(glGetUniformLocation(m_deferredShader, "fogStartRadius"), fogStart);
+    glUniform1f(glGetUniformLocation(m_deferredShader, "fogEndRadius"),   fogEnd);
+    glUniform3fv(glGetUniformLocation(m_deferredShader, "fogColor"), 1, &fogCol[0]);
+
+
     glUniform1f(glGetUniformLocation(m_deferredShader, "k_s"), 1.5f);
     for(int i=0; i<numLights; i++) {
         std::string base = "lights[" + std::to_string(i) + "]";
@@ -868,6 +938,8 @@ void Realtime::initSphere() {
     glBindVertexArray(0);
 }
 
+
+
 //When snake dies/ to spawn snake
 void Realtime::resetSnake() {
     // head
@@ -901,44 +973,51 @@ void Realtime::resetSnake() {
     m_bossPos    = glm::vec3(0.f);   // doesn't matter, not drawn when inactive
     m_bossVel    = glm::vec3(0.f);
     m_timeLeft   = 20.0f;
+
+    m_speedBoostActive = false;
+    m_speedBoostTimer  = 0.f;
+    m_jumpBoostActive  = false;
+    m_jumpBoostTimer   = 0.f;
 }
 
 
 void Realtime::spawnFood() {
-    const float arenaRadius = 28.0f;   // same RADIUS as buildNeonScene
-    const float margin      = 3.0f;    // keep away from walls
-    const int   maxTries    = 200;
+    const float arenaBounds = 26.0f;   // slightly inside walls
+    const float margin      = 3.0f;
 
-    for (int attempt = 0; attempt < maxTries; ++attempt) {
-        // random x,z in [-R+margin, R-margin]
-        float rx = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaRadius - margin);
-        float rz = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaRadius - margin);
+    // Random type: 0 = normal, 1 = speed, 2 = jump
+    int r = rand() % 100;
 
-        // check maze occupancy
-        int gx = (int)(rx / GRID_SCALE) + GRID_SIZE / 2;
-        int gz = (int)(rz / GRID_SCALE) + GRID_SIZE / 2;
+    if (r < 70) {
+        m_foodType = FOOD_NORMAL;
+    }
+    else if (r < 85) {
+        m_foodType = FOOD_SPEED;
+    }
+    else {
+        m_foodType = FOOD_JUMP;
+    }
 
-        if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) {
-            continue;
-        }
+    // Find a free spot in the arena (avoid maze walls)
+    for (int tries = 0; tries < 100; ++tries) {
+        float x = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaBounds - margin);
+        float z = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaBounds - margin);
 
-        // 1 means wall block — skip
-        if (m_mazeGrid[gx][gz] == 1) {
-            continue;
-        }
+        int gx = static_cast<int>(x / GRID_SCALE) + GRID_SIZE / 2;
+        int gz = static_cast<int>(z / GRID_SCALE) + GRID_SIZE / 2;
 
-        // looks good -> place food here
-        m_foodPos = glm::vec3(rx, 1.0f, rz); // same height as snake
+        if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) continue;
+        if (m_mazeGrid[gx][gz] == 1) continue; // don't spawn in wall
+
+        m_foodPos = glm::vec3(x, 1.0f, z); // same height as snake
         m_hasFood = true;
         return;
     }
 
-    // Fallback: just drop it at center if we couldn't find a spot
+    // Fallback: put it at center if all else fails
     m_foodPos = glm::vec3(0.f, 1.0f, 0.f);
     m_hasFood = true;
 }
-
-
 
 
 void Realtime::initQuad() {
@@ -977,11 +1056,15 @@ void Realtime::keyPressEvent(QKeyEvent *e) {
         int key = e->key();
 
         // Jump
-        if (key == Qt::Key_Space) {
-            if (m_snakeOnGround) {
-                m_snakeJumpVel  = m_snakeJumpImpulse;
-                m_snakeOnGround = false;
+        if (key == Qt::Key_Space && m_snakeOnGround) {
+            m_snakeOnGround = false;
+
+            float jumpImpulse = m_snakeJumpImpulse;
+            if (m_jumpBoostActive) {
+                jumpImpulse *= 1.7f;   // jump higher when boosted
             }
+
+            m_snakeJumpVel = jumpImpulse;
         }
 
         // WASD movement

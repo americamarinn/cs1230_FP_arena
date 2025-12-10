@@ -153,16 +153,44 @@ private:
 
     void updateSnakeForceDirFromKeys();
 
+    // --- Food / powerup types ---
+    enum FoodType {
+        FOOD_NORMAL = 0,
+        FOOD_SPEED  = 1,
+        FOOD_JUMP   = 2
+    };
+
     // --- FOOD ---
     glm::vec3 m_foodPos      = glm::vec3(0.f);
     bool      m_hasFood      = false;
     float     m_foodRadius   = 1.2f;   // collision radius
+
+    FoodType  m_foodType   = FOOD_NORMAL;
+
+    // --- Power-up state ---
+    bool  m_speedBoostActive = false;
+    float m_speedBoostTimer  = 0.f;
+    float m_speedBoostDuration = 7.0f;   // seconds
+
+    bool  m_jumpBoostActive  = false;
+    float m_jumpBoostTimer   = 0.f;
+    float m_jumpBoostDuration = 7.0f;    // seconds
 
     // --- FOOD MESH (sphere) ---
     GLuint m_sphereVAO       = 0;
     GLuint m_sphereVBO       = 0;
     int    m_sphereNumVerts  = 0;
 
+    struct Laser {
+        glm::vec3 center;    // base center position
+        glm::vec3 axis;      // (1,0,0) for X-aligned, (0,0,1) for Z-aligned
+        float length;
+        float thickness;
+        float speed;         // how fast it sweeps
+        float phase;         // per-laser offset
+        glm::vec3 color;     // bright "volt" colour
+        float emissive;      // emissive strength
+    };
 
 
 

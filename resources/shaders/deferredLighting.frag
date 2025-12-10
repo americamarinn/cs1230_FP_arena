@@ -31,6 +31,12 @@ struct Light {
 uniform int   numLights;
 uniform Light lights[8];
 
+// === Fog parameters (NEW) ===
+uniform float fogStartRadius;  // where fog begins (in world XZ)
+uniform float fogEndRadius;    // where fog is fully opaque
+uniform vec3  fogColor;        // colour of the fog (matches clear colour-ish)
+
+
 // ----------------------------------------------------
 // 🛠️ DEBUG SWITCH: Change this value to visualize a buffer
 // 0 = Full Lighting, 1 = Position, 2 = Normal, 3 = Albedo, 4 = Emissive
@@ -154,9 +160,32 @@ void main() {
     // Add Emissive
     final_color += emissive;
 
-    debug_color = final_color;
+    // === FOG AROUND ARENA (NEW, SOFTER + GRADIENT) ===
+    // distance from arena centre in XZ
+    float r = length(position.xz);
+
+    // how far past start radius we are, normalized to [0,1]
+    float denom   = max(fogEndRadius - fogStartRadius, 0.001);
+    float tRad    = clamp((r - fogStartRadius) / denom, 0.0, 1.0);
+
+    // Gradient fog colour: near = base fogColor, far = more purple/pink
+    vec3 fogNear = fogColor;
+    vec3 fogFar  = vec3(0.15, 0.05, 0.20);  // clubby magenta/violet
+    vec3 fogGrad = mix(fogNear, fogFar, tRad);
+
+    // Make fog build up more slowly: raise tRad to a power > 1
+    float fogStrength = pow(tRad, 1.8);   // 0 -> no fog, 1 -> strong fog near edge
+
+    // fogFactor = how much of the scene we keep
+    float fogFactor = 1.0 - fogStrength;  // closer to 1 = less fog
+
+    // Final mix: mostly scene colour, gentle fog at edges
+    vec3 foggedColor = mix(fogGrad, final_color, fogFactor);
+
+    debug_color = foggedColor;
+
 #endif
 
     fragColor = vec4(debug_color, 1.0);
-    // fragColor = vec4(1.0, 0.0, 1.0, 1.0);
 }
+
