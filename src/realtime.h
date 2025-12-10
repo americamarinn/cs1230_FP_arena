@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <deque>
 
 // Utils
 #include "utils/camera.h"
@@ -19,6 +20,7 @@
 #include "utils/snakegame.h"
 #include "terraingenerator.h"
 #include "utils/cube.h"
+#include "utils/sphere.h"
 
 enum GameState {
     START_SCREEN,
@@ -39,6 +41,7 @@ protected:
     void resizeGL(int w, int h) override;
     void timerEvent(QTimerEvent*) override;
     void keyPressEvent(QKeyEvent*) override;
+    void keyReleaseEvent(QKeyEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
@@ -117,6 +120,52 @@ private:
 
     SnakeGame m_snake;
 
+    // --- SIMPLE SNAKE (STEP 1: HEAD ONLY) ---
+    struct SnakeState {
+        glm::vec3 pos; // center of cube
+        glm::vec3 vel;
+    };
+
+    SnakeState m_snakeState;
+
+    // Body segments
+    std::vector<glm::vec3> m_snakeBody;
+
+    // High-res trail for body following
+    std::deque<glm::vec3> m_snakeTrail;
+    glm::vec3 m_lastTrailPos = glm::vec3(0.f);
+    float     m_trailAccumDist = 0.f;
+    float     m_trailSampleDist = 0.4f;   // spacing along trail
+
+    glm::vec3 m_snakeForceDir = glm::vec3(0.f);
+
+    float m_snakeMass       = 1.0f;
+    float m_snakeForceMag   = 70.0f;  // input strength
+    float m_snakeFriction   = 8.0f;   // damping
+    float m_snakeMaxSpeed   = 8.0f;   // clamp
+
+    // jump
+    float m_snakeJumpOffset  = 0.0f;
+    float m_snakeJumpVel     = 0.0f;
+    float m_snakeJumpImpulse = 7.0f;
+    float m_snakeGravity     = 20.0f;
+    bool  m_snakeOnGround    = true;
+
+    void updateSnakeForceDirFromKeys();
+
+    // --- FOOD ---
+    glm::vec3 m_foodPos      = glm::vec3(0.f);
+    bool      m_hasFood      = false;
+    float     m_foodRadius   = 1.2f;   // collision radius
+
+    // --- FOOD MESH (sphere) ---
+    GLuint m_sphereVAO       = 0;
+    GLuint m_sphereVBO       = 0;
+    int    m_sphereNumVerts  = 0;
+
+
+
+
     // --- HELPERS ---
     void buildNeonScene();
     void updateLightPhysics();
@@ -125,5 +174,30 @@ private:
     void initCube();
     void initQuad();
     void initTerrain();
+
+    void initSphere();
+    void resetSnake();
+
+    // --- Snake death / squish animation ---
+    bool  m_snakeDead      = false;
+    float m_deathTimer     = 0.0f;
+    float m_deathDuration  = 0.25f; // length of squish animation (seconds)
+
+    // Round timer -> when this hits 0, boss wakes up
+    float m_roundTime   = 20.0f;  // total seconds per round
+    float m_timeLeft    = 20.0f;
+
+    // Boss (chaser) data
+    bool        m_bossActive   = false;
+    glm::vec3   m_bossPos      = glm::vec3(0.f);
+    glm::vec3   m_bossVel      = glm::vec3(0.f);
+    float       m_bossSpeed    = 9.0f;   // slightly faster than snake max
+    float       m_bossHitRadius = 1.8f;   // collision radius with snake head
+
+
+    void startSnakeDeath();
+    bool snakeHeadHitsWall() const;
+
+    void spawnFood();
     GLuint loadTexture2D(const std::string &path);
 };

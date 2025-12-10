@@ -6,6 +6,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "utils/debug.h"
 #include <cstdlib>
+#include "utils/sphere.h"
 
 void checkFramebufferStatus() {
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -85,6 +86,7 @@ void Realtime::initializeGL() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     initCube();
+    initSphere(); //FOOD
     initQuad();
     initTerrain();
 
@@ -94,9 +96,28 @@ void Realtime::initializeGL() {
     m_wallTexture = loadTexture2D("resources/textures/wall_texture.jpg");
 
     buildNeonScene();
-    m_snake.init();
+    // m_snake.init(); We are changing this to resetSnake
+    resetSnake();
 
     m_camera.setViewMatrix(m_camPos, m_camLook, glm::vec3(0,1,0));
+
+    // --- Snake initial state (center of arena) ---
+    // m_snakeState.pos = glm::vec3(0.f, 0.5f, 0.f); // sit slightly above floor
+    // m_snakeState.vel = glm::vec3(0.f);
+
+    m_snakeForceDir   = glm::vec3(0.f);
+    m_snakeMass       = 1.0f;
+    m_snakeForceMag   = 110.0f;
+    m_snakeFriction   = 8.0f;
+    m_snakeMaxSpeed   = 10.0f;
+
+    m_snakeJumpOffset  = 0.0f;
+    m_snakeJumpVel     = 0.0f;
+    m_snakeJumpImpulse = 12.0f;
+    m_snakeGravity     = 20.0f;
+    m_snakeOnGround    = true;
+
+
     float aspect = (float)width() / (float)height();
     m_camera.setProjectionMatrix(aspect, 0.1f, 100.f, glm::radians(45.f));
 
@@ -105,11 +126,199 @@ void Realtime::initializeGL() {
 }
 
 void Realtime::timerEvent(QTimerEvent *event) {
-    if (m_gameState == PLAYING || m_gameState == START_SCREEN) {
-        updateLightPhysics();
+    Q_UNUSED(event);
+
+    // Delta time
+    float deltaTime = m_elapsedTimer.elapsed() * 0.001f;
+    m_elapsedTimer.restart();
+
+    // Lights keep bouncing
+    updateLightPhysics();
+
+    // If snake is in death animation, just advance timer and redraw
+    if (m_snakeDead) {
+        m_deathTimer += deltaTime;
+        if (m_deathTimer >= m_deathDuration) {
+            resetSnake();
+        }
         update();
+        return;
     }
+
+
+    if (m_gameState != PLAYING) {
+        update();
+        return;
+    }
+
+    // ======= 1) SNAKE PHYSICS (head) =======
+    // Force from WASD
+    glm::vec3 F_input = m_snakeForceDir * m_snakeForceMag;
+    glm::vec3 F_fric  = -m_snakeState.vel * m_snakeFriction;
+    glm::vec3 F_total = F_input + F_fric;
+
+    glm::vec3 a = F_total / m_snakeMass;
+    m_snakeState.vel += a * deltaTime;
+
+    // Clamp speed
+    float speed = glm::length(m_snakeState.vel);
+    if (speed > m_snakeMaxSpeed) {
+        m_snakeState.vel = (m_snakeState.vel / speed) * m_snakeMaxSpeed;
+    }
+
+    // Integrate position on XZ plane
+    m_snakeState.pos += m_snakeState.vel * deltaTime;
+    m_snakeState.pos.y = 1.0f;   // stay on floor plane
+
+    // Jump motion
+    if (!m_snakeOnGround) {
+        m_snakeJumpVel    -= m_snakeGravity * deltaTime;
+        m_snakeJumpOffset += m_snakeJumpVel * deltaTime;
+
+        if (m_snakeJumpOffset <= 0.f) {
+            m_snakeJumpOffset = 0.f;
+            m_snakeJumpVel    = 0.f;
+            m_snakeOnGround   = true;
+        }
+    }
+
+    // ======= 2) UPDATE TRAIL =======
+    float stepDist = glm::length(m_snakeState.pos - m_lastTrailPos);
+    m_trailAccumDist += stepDist;
+
+    if (m_trailAccumDist >= m_trailSampleDist) {
+        m_snakeTrail.push_front(m_snakeState.pos);
+        m_lastTrailPos   = m_snakeState.pos;
+        m_trailAccumDist = 0.f;
+
+        // Keep a reasonable trail length
+        size_t maxTrail = (m_snakeBody.size() + 5) * 8;
+        while (m_snakeTrail.size() > maxTrail) {
+            m_snakeTrail.pop_back();
+        }
+    }
+
+    // ======= 3) BODY SEGMENTS FOLLOW TRAIL =======
+    for (size_t i = 0; i < m_snakeBody.size(); ++i) {
+        size_t idx = (i + 1) * 6;  // spacing along trail
+        if (idx < m_snakeTrail.size()) {
+            m_snakeBody[i] = m_snakeTrail[idx];
+        } else {
+            m_snakeBody[i] = m_snakeState.pos;
+        }
+    }
+
+    // ======= 4) FOOD COLLISION =======
+    if (m_hasFood) {
+        float d = glm::length(m_snakeState.pos - m_foodPos);
+        if (d < m_foodRadius) {
+            // Grow: add one new body segment
+            glm::vec3 newSeg = m_snakeState.pos;
+            if (!m_snakeBody.empty()) {
+                newSeg = m_snakeBody.back();
+            }
+            m_snakeBody.push_back(newSeg);
+
+            m_hasFood = false;
+            spawnFood();
+        }
+    }
+
+    // ======= 4.5) SELF-COLLISION (HEAD VS BODY) =======
+    {
+        // We skip the first few segments so tiny overlaps / jitter
+        // near the neck don't insta-kill you.
+        const float headHitRadius = 1.7f;  // pretty close, but forgiving
+
+        for (size_t i = 1; i < m_snakeBody.size(); ++i) {
+            float d = glm::length(m_snakeBody[i] - m_snakeState.pos);
+            if (d < headHitRadius) {
+                startSnakeDeath();
+                break;
+            }
+        }
+    }
+
+    // ======= 5) WALL COLLISION (head) =======
+    if (!m_snakeDead && snakeHeadHitsWall()) {
+        startSnakeDeath();
+    }
+
+    // ======= 5B) TIMER + BOSS WAKE-UP =======
+    if (!m_bossActive) {
+        m_timeLeft -= deltaTime;
+        if (m_timeLeft <= 0.f) {
+            m_timeLeft   = 0.f;
+            m_bossActive = true;
+
+            // Spawn boss somewhere away from player
+            m_bossPos = glm::vec3(-24.f, 1.0f, 24.f);
+            m_bossVel = glm::vec3(0.f);
+        }
+    }
+
+    // ======= 6) BOSS PATHFIND CHASE =======
+    if (m_bossActive) {
+
+        // Convert to grid space
+        int bx = int(m_bossPos.x / GRID_SCALE) + GRID_SIZE/2;
+        int bz = int(m_bossPos.z / GRID_SCALE) + GRID_SIZE/2;
+
+        int sx = int(m_snakeState.pos.x / GRID_SCALE) + GRID_SIZE/2;
+        int sz = int(m_snakeState.pos.z / GRID_SCALE) + GRID_SIZE/2;
+
+        // Validate grid bounds
+        if (bx>=0 && bx<GRID_SIZE && bz>=0 && bz<GRID_SIZE &&
+            sx>=0 && sx<GRID_SIZE && sz>=0 && sz<GRID_SIZE)
+        {
+            glm::vec3 move(0.f);
+
+            float dx = sx - bx;
+            float dz = sz - bz;
+
+            // Try X-first or Z-first based on larger distance
+            if (std::abs(dx) > std::abs(dz)) {
+                int step = (dx > 0) ? 1 : -1;
+                if (m_mazeGrid[bx+step][bz] == 0)
+                    move.x = step * GRID_SCALE;
+                else {
+                    int stepZ = (dz > 0) ? 1 : -1;
+                    if (m_mazeGrid[bx][bz+stepZ] == 0)
+                        move.z = stepZ * GRID_SCALE;
+                }
+            } else {
+                int step = (dz > 0) ? 1 : -1;
+                if (m_mazeGrid[bx][bz+step] == 0)
+                    move.z = step * GRID_SCALE;
+                else {
+                    int stepX = (dx > 0) ? 1 : -1;
+                    if (m_mazeGrid[bx+stepX][bz] == 0)
+                        move.x = stepX * GRID_SCALE;
+                }
+            }
+
+            // Smooth move toward next valid tile
+            glm::vec3 targetPos = m_bossPos + move;
+            glm::vec3 delta = targetPos - m_bossPos;
+            float dist = glm::length(delta);
+            if (dist > 0.001f) {
+                glm::vec3 dir = delta / dist;
+                m_bossPos += dir * m_bossSpeed * deltaTime;
+                m_bossPos.y = 1.0f;
+            }
+        }
+
+        // Boss-snake collision
+        if (glm::length(m_bossPos - m_snakeState.pos) < m_bossHitRadius) {
+            startSnakeDeath();
+        }
+    }
+
+
+    update();
 }
+
+
 
 void Realtime::updateLightPhysics() {
     float arenaBounds = 28.0f;
@@ -135,6 +344,70 @@ void Realtime::updateLightPhysics() {
         else light.pos += light.vel;
     }
 }
+
+//updagin snake dir vector after key is pressed
+void Realtime::updateSnakeForceDirFromKeys() {
+    glm::vec3 dir(0.f);
+
+    if (m_keyMap[Qt::Key_W]) dir += glm::vec3(0.f, 0.f, -1.f);
+    if (m_keyMap[Qt::Key_S]) dir += glm::vec3(0.f, 0.f,  1.f);
+    if (m_keyMap[Qt::Key_A]) dir += glm::vec3(-1.f, 0.f, 0.f);
+    if (m_keyMap[Qt::Key_D]) dir += glm::vec3( 1.f, 0.f, 0.f);
+
+    if (glm::length(dir) > 0.f) dir = glm::normalize(dir);
+    m_snakeForceDir = dir;
+}
+
+bool Realtime::snakeHeadHitsWall() const {
+    // Match arena radius used in buildNeonScene / updateLightPhysics
+    const float arenaBounds = 28.0f;
+
+    // Head center position
+    glm::vec3 p = m_snakeState.pos;
+    float headCenterY = 1.0f + m_snakeJumpOffset; // base y is 1.0
+    float headRadius  = 1.0f;                     // because scale = 2.f
+    float headBottomY = headCenterY - headRadius;
+
+    // Approximate top of the inner walls:
+    // WALL_H = 3.5, center y = WALL_H/2 - 0.5 → 1.25
+    // top ≈ 1.25 + WALL_H/2 = 3.0
+    const float wallTopY = 3.0f;
+
+    // --- 1) Outer arena bounds ---
+    if ((std::abs(p.x) > arenaBounds || std::abs(p.z) > arenaBounds) &&
+        headBottomY < wallTopY) {
+        return true;
+    }
+
+    // --- 2) Maze walls using m_mazeGrid ---
+    int gx = static_cast<int>(p.x / GRID_SCALE) + GRID_SIZE / 2;
+    int gz = static_cast<int>(p.z / GRID_SCALE) + GRID_SIZE / 2;
+
+    if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) {
+        return false;
+    }
+
+    // If this cell is a wall and the snake is not high enough to clear it,
+    // we treat it as a collision.
+    if (m_mazeGrid[gx][gz] == 1 && headBottomY < wallTopY) {
+        return true;
+    }
+
+    return false;
+}
+
+void Realtime::startSnakeDeath() {
+    if (m_snakeDead) return; // already animating death
+
+    m_snakeDead    = true;
+    m_deathTimer   = 0.0f;
+
+    // Optional: you could also clear input so it doesn't "queue" movement
+    m_snakeForceDir = glm::vec3(0.f);
+    m_snakeState.vel = glm::vec3(0.f);
+}
+
+
 
 // Fixed 5 Arguments: Pos, Text, Color, Scale, TextureID
 void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 color, float scale, GLuint texID) {
@@ -224,7 +497,7 @@ void Realtime::buildNeonScene() {
     m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
     m_props.push_back({ glm::vec3( RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
 
-    // Portal Lights (FIX: Added vec3(0) for velocity)
+    // Portal Lights
     m_lights.push_back({ glm::vec3(-RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
     m_lights.push_back({ glm::vec3( RADIUS, 1.0f, 0), glm::vec3(0), cPortal, 5.0f });
 
@@ -306,6 +579,7 @@ void Realtime::paintGL() {
         return;
     }
 
+
     // --- PHASE 1: GEOMETRY ---
     m_gbuffer.bindForWriting();
     glViewport(0, 0, w, h);
@@ -313,18 +587,35 @@ void Realtime::paintGL() {
     glEnable(GL_DEPTH_TEST);
 
     glUseProgram(m_gbufferShader);
-    glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "view"), 1, GL_FALSE, &m_camera.getViewMatrix()[0][0]);
-    glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "proj"), 1, GL_FALSE, &m_camera.getProjMatrix()[0][0]);
 
+    glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "view"), 1, GL_FALSE,
+                       &m_camera.getViewMatrix()[0][0]);
+    glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "proj"), 1, GL_FALSE,
+                       &m_camera.getProjMatrix()[0][0]);
+
+    // Death animation progress [0,1]
+    float deathT = 0.0f;
+    if (m_snakeDead && m_deathDuration > 0.0f) {
+        deathT = m_deathTimer / m_deathDuration;
+        if (deathT < 0.0f) deathT = 0.0f;
+        if (deathT > 1.0f) deathT = 1.0f;
+    }
+
+    // === Use cube VAO for arena + snake ===
     glBindVertexArray(m_cubeVAO);
+
+    // 1) ARENA PROPS
     for (const auto& prop : m_props) {
-        glm::mat4 model = glm::translate(glm::mat4(1.f), prop.pos) * glm::scale(glm::mat4(1.f), prop.scale);
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.f), prop.pos) *
+            glm::scale(glm::mat4(1.f), prop.scale);
+
         glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"), 1, GL_FALSE, &model[0][0]);
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"), 1, &prop.color[0]);
+
         glm::vec3 emissive = prop.color * prop.emissiveStrength;
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"), 1, &emissive[0]);
 
-        // ** TEXTURE BINDING **
         if (prop.textureID != 0) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, prop.textureID);
@@ -336,8 +627,129 @@ void Realtime::paintGL() {
 
         glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
     }
+
+    // 2) snake head (with optional death squish)
+    {
+        glm::vec3 snakePos =
+            m_snakeState.pos + glm::vec3(0.f, m_snakeJumpOffset, 0.f);
+
+        // Base scale for alive snake
+        glm::vec3 baseScale = glm::vec3(2.f);
+
+        // Apply squish/stretch during death animation
+        // Squash Y down, stretch XZ out a bit as deathT -> 1
+        float squash  = 1.0f - 0.5f * deathT;  // from 1.0 to 0.5
+        float stretch = 1.0f + 0.4f * deathT;  // from 1.0 to 1.4
+
+        glm::vec3 headScale = glm::vec3(baseScale.x * stretch,
+                                        baseScale.y * squash,
+                                        baseScale.z * stretch);
+
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.f), snakePos) *
+            glm::scale(glm::mat4(1.f), headScale);
+
+        glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"), 1, GL_FALSE, &model[0][0]);
+
+        // Base colors
+        glm::vec3 aliveColor    = glm::vec3(0.0f, 0.55f, 1.0f);
+        glm::vec3 aliveEmissive = glm::vec3(0.0f, 2.0f, 3.5f);
+
+        // Fade to black + no glow as deathT -> 1
+        glm::vec3 snakeColor =
+            (1.0f - deathT) * aliveColor;
+        glm::vec3 snakeEmissive =
+            (1.0f - deathT) * aliveEmissive;
+
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"), 1, &snakeColor[0]);
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"), 1, &snakeEmissive[0]);
+
+        glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+
+        glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
+    }
+
+
+    // 3) BODY SEGMENTS
+    for (const glm::vec3 &segPos : m_snakeBody) {
+        glm::vec3 segRenderPos = segPos + glm::vec3(0.f, m_snakeJumpOffset, 0.f);
+
+        glm::mat4 bodyModel =
+            glm::translate(glm::mat4(1.f), segRenderPos) *
+            glm::scale(glm::mat4(1.f), glm::vec3(1.6f));
+
+        glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"),
+                           1, GL_FALSE, &bodyModel[0][0]);
+
+        glm::vec3 bodyColor    = glm::vec3(0.0f, 0.45f, 0.9f);
+        glm::vec3 bodyEmissive = glm::vec3(0.0f, 1.0f, 2.0f);
+
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),  1, &bodyColor[0]);
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"),1, &bodyEmissive[0]);
+        glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+
+        glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
+    }
+
+    // --- FOOD SPHERE ---
+    if (m_hasFood && m_sphereVAO != 0 && m_sphereNumVerts > 0) {
+        glm::mat4 foodModel =
+            glm::translate(glm::mat4(1.f), m_foodPos) *
+            glm::scale(glm::mat4(1.f), glm::vec3(2.0f));
+
+        glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"),
+                           1, GL_FALSE, &foodModel[0][0]);
+
+        // Soft glowing green-yellow
+        glm::vec3 foodColor    = glm::vec3(0.25f, 0.30f, 0.10f);
+        glm::vec3 foodEmissive = glm::vec3(0.25f, 0.36f, 0.15f); // strong glow
+
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),
+                     1, &foodColor[0]);
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"),
+                     1, &foodEmissive[0]);
+
+        glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+
+        // No lighting interaction
+        glUniform1f(glGetUniformLocation(m_gbufferShader, "k_d"), 0.0f);
+        glUniform1f(glGetUniformLocation(m_gbufferShader, "k_s"), 0.0f);
+        glUniform1f(glGetUniformLocation(m_gbufferShader, "shininess"), 1.0f);
+
+        glBindVertexArray(m_sphereVAO);
+        glDrawArrays(GL_TRIANGLES, 0, m_sphereNumVerts);
+        glBindVertexArray(0);
+    }
+
+    // === BOSS CUBE ===
+    if (m_bossActive) {
+        glBindVertexArray(m_cubeVAO);
+
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.f), m_bossPos) *
+            glm::scale(glm::mat4(1.f), glm::vec3(2.0f)); // good size
+
+        glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"),
+                           1, GL_FALSE, &model[0][0]);
+
+        glm::vec3 bossColor    = glm::vec3(1.0f, 0.15f, 0.3f);
+        glm::vec3 bossEmissive = glm::vec3(3.0f, 0.25f, 1.0f);
+
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),
+                     1, &bossColor[0]);
+        glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"),
+                     1, &bossEmissive[0]);
+
+        glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+
+        glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
+    }
+
+
+    // Done with geometry
     glBindVertexArray(0);
     GL_CHECK();
+
 
     // --- PHASE 2: LIGHTING ---
     glDisable(GL_DEPTH_TEST);
@@ -425,6 +837,110 @@ void Realtime::initCube() {
     glBindVertexArray(0);
 }
 
+//sphere for food
+void Realtime::initSphere() {
+    Sphere sphere;
+    sphere.updateParams(20, 20);             // reasonably smooth
+    std::vector<float> data = sphere.generateShape();
+
+    m_sphereNumVerts = data.size() / 6;      // pos(3) + norm(3)
+
+    glGenVertexArrays(1, &m_sphereVAO);
+    glBindVertexArray(m_sphereVAO);
+
+    glGenBuffers(1, &m_sphereVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_sphereVBO);
+    glBufferData(GL_ARRAY_BUFFER,
+                 data.size() * sizeof(float),
+                 data.data(),
+                 GL_STATIC_DRAW);
+
+    // position
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                          6 * sizeof(float), (void*)0);
+
+    // normal
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
+                          6 * sizeof(float), (void*)(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+}
+
+//When snake dies/ to spawn snake
+void Realtime::resetSnake() {
+    // head
+    m_snakeState.pos = glm::vec3(0.f, 1.0f, 0.f);
+    m_snakeState.vel = glm::vec3(0.f);
+    m_snakeForceDir  = glm::vec3(0.f);
+
+    // jump
+    m_snakeJumpOffset  = 0.f;
+    m_snakeJumpVel     = 0.f;
+    m_snakeOnGround    = true;
+
+    // trail + body
+    m_snakeTrail.clear();
+    m_snakeBody.clear();
+    m_lastTrailPos    = m_snakeState.pos;
+    m_trailAccumDist  = 0.f;
+    m_trailSampleDist = 1.2f;   // spacing between samples (tweak feel)
+
+    // food
+    m_hasFood   = false;
+    m_foodRadius = 2.0f;       // works with 2.0f sphere scale
+    spawnFood();
+
+    // Reset death animation state
+    m_snakeDead     = false;
+    m_deathTimer    = 0.0f;
+    m_deathDuration = 0.25f;
+
+    m_bossActive = false;
+    m_bossPos    = glm::vec3(0.f);   // doesn't matter, not drawn when inactive
+    m_bossVel    = glm::vec3(0.f);
+    m_timeLeft   = 20.0f;
+}
+
+
+void Realtime::spawnFood() {
+    const float arenaRadius = 28.0f;   // same RADIUS as buildNeonScene
+    const float margin      = 3.0f;    // keep away from walls
+    const int   maxTries    = 200;
+
+    for (int attempt = 0; attempt < maxTries; ++attempt) {
+        // random x,z in [-R+margin, R-margin]
+        float rx = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaRadius - margin);
+        float rz = ((rand() / (float)RAND_MAX) * 2.f - 1.f) * (arenaRadius - margin);
+
+        // check maze occupancy
+        int gx = (int)(rx / GRID_SCALE) + GRID_SIZE / 2;
+        int gz = (int)(rz / GRID_SCALE) + GRID_SIZE / 2;
+
+        if (gx < 0 || gx >= GRID_SIZE || gz < 0 || gz >= GRID_SIZE) {
+            continue;
+        }
+
+        // 1 means wall block — skip
+        if (m_mazeGrid[gx][gz] == 1) {
+            continue;
+        }
+
+        // looks good -> place food here
+        m_foodPos = glm::vec3(rx, 1.0f, rz); // same height as snake
+        m_hasFood = true;
+        return;
+    }
+
+    // Fallback: just drop it at center if we couldn't find a spot
+    m_foodPos = glm::vec3(0.f, 1.0f, 0.f);
+    m_hasFood = true;
+}
+
+
+
+
 void Realtime::initQuad() {
     float verts[] = {-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1, -1,1,0,1, 1,-1,1,0};
     glGenVertexArrays(1, &m_quadVAO); glBindVertexArray(m_quadVAO);
@@ -450,9 +966,50 @@ GLuint Realtime::loadTexture2D(const std::string &path) {
 }
 
 void Realtime::keyPressEvent(QKeyEvent *e) {
-    if(m_gameState==START_SCREEN && e->key()==Qt::Key_Space) { m_gameState=PLAYING; update(); return; }
-    m_keyMap[e->key()] = true; update();
+    // Start screen -> playing
+    if (m_gameState == START_SCREEN && e->key() == Qt::Key_Space) {
+        m_gameState = PLAYING;
+        update();
+        return;
+    }
+
+    if (m_gameState == PLAYING) {
+        int key = e->key();
+
+        // Jump
+        if (key == Qt::Key_Space) {
+            if (m_snakeOnGround) {
+                m_snakeJumpVel  = m_snakeJumpImpulse;
+                m_snakeOnGround = false;
+            }
+        }
+
+        // WASD movement
+        if (key == Qt::Key_W || key == Qt::Key_A ||
+            key == Qt::Key_S || key == Qt::Key_D) {
+
+            m_keyMap[key] = true;
+            updateSnakeForceDirFromKeys();
+        }
+    }
+
+    update();
 }
+
+void Realtime::keyReleaseEvent(QKeyEvent *e) {
+    if (m_gameState != PLAYING) return;
+
+    int key = e->key();
+    m_keyMap[key] = false;
+
+    if (key == Qt::Key_W || key == Qt::Key_A ||
+        key == Qt::Key_S || key == Qt::Key_D) {
+        updateSnakeForceDirFromKeys();
+    }
+}
+
+
+
 void Realtime::mousePressEvent(QMouseEvent *e) { if(e->button()==Qt::LeftButton) { m_mouseDown=true; m_prevMousePos=glm::vec2(e->pos().x(),e->pos().y()); }}
 void Realtime::mouseReleaseEvent(QMouseEvent *e) { m_mouseDown=false; }
 void Realtime::mouseMoveEvent(QMouseEvent *e) {
