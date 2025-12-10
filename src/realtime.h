@@ -192,6 +192,54 @@ private:
         float emissive;      // emissive strength
     };
 
+    // Cloth ghost settings
+    static const int GHOST_W = 18;   // wider
+    static const int GHOST_H = 6;    // grid height
+
+    struct GhostParticle {
+        glm::vec3 pos;
+        glm::vec3 vel;
+        bool pinned;
+    };
+
+
+    float m_ghostRestLenX = 0.45f;   // spacing left–right
+    float m_ghostRestLenZ = 0.28f;   // spacing front–back
+
+
+
+    glm::vec3 m_ghostOffset = glm::vec3(0.0f, 1.2f, 0.0f); // tweak 1.0–1.4 to taste
+    float     m_ghostRadius = 0.7f;                        // invisible head sphere
+
+
+
+    float m_ghostTime = 0.0f; // for wind
+
+    GhostParticle m_ghost[GHOST_W * GHOST_H];
+
+    float m_ghostRestX;      // rest length horizontally
+    float m_ghostRestZ;      // rest length vertically
+    float m_ghostK;          // spring stiffness
+    float m_ghostDamping;    // velocity damping
+    float m_ghostMass;       // mass per particle
+
+    // helper
+    int ghostIndex(int x, int y) const;
+    void initGhostCloth(const glm::vec3 &bossPos);
+    bool isGhostPinned(int x, int y) const;
+    void updateGhostCloth(float dt, const glm::vec3 &bossPos, const glm::vec3 &bossVel);
+    void drawGhostCloth();   // called from paintGL()
+    //END OF GHOST STUFF
+
+    // ---- Cloth ghost rendering ----
+    float m_bossPulseTime = 0.f;
+    GLuint m_ghostVAO = 0;
+    GLuint m_ghostVBO = 0;
+    int    m_ghostNumVerts = 0;
+
+    void initGhostBuffers();
+
+
 
 
     // --- HELPERS ---

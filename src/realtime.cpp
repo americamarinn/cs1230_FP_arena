@@ -8,6 +8,10 @@
 #include <cstdlib>
 #include "utils/sphere.h"
 
+int Realtime::ghostIndex(int x, int y) const {
+    return y * GHOST_W + x;
+}
+
 void checkFramebufferStatus() {
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -89,6 +93,7 @@ void Realtime::initializeGL() {
     initSphere(); //FOOD
     initQuad();
     initTerrain();
+    initGhostBuffers();
 
     // ** LOAD TEXTURES **
     m_grassDiffuseTex = loadTexture2D("resources/textures/grass_color.jpg");
@@ -131,6 +136,8 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Delta time
     float deltaTime = m_elapsedTimer.elapsed() * 0.001f;
     m_elapsedTimer.restart();
+
+    m_bossPulseTime += deltaTime;
 
     // --- Power-up timers ---
     if (m_speedBoostActive) {
@@ -290,6 +297,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
             // Spawn boss somewhere away from player
             m_bossPos = glm::vec3(-24.f, 1.0f, 24.f);
             m_bossVel = glm::vec3(0.f);
+            initGhostCloth(m_bossPos);
         }
     }
 
@@ -302,6 +310,9 @@ void Realtime::timerEvent(QTimerEvent *event) {
 
         int sx = int(m_snakeState.pos.x / GRID_SCALE) + GRID_SIZE/2;
         int sz = int(m_snakeState.pos.z / GRID_SCALE) + GRID_SIZE/2;
+
+
+
 
         // Validate grid bounds
         if (bx>=0 && bx<GRID_SIZE && bz>=0 && bz<GRID_SIZE &&
@@ -341,6 +352,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
                 glm::vec3 dir = delta / dist;
                 m_bossPos += dir * m_bossSpeed * deltaTime;
                 m_bossPos.y = 1.0f;
+                updateGhostCloth(deltaTime, m_bossPos, m_bossVel);
             }
         }
 
@@ -788,8 +800,11 @@ void Realtime::paintGL() {
         glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"),
                            1, GL_FALSE, &model[0][0]);
 
-        glm::vec3 bossColor    = glm::vec3(1.0f, 0.15f, 0.3f);
-        glm::vec3 bossEmissive = glm::vec3(3.0f, 0.25f, 1.0f);
+        float pulse = sin(m_bossPulseTime * 3.0f) * 0.5f + 0.5f; // [0,1]
+        glm::vec3 bossColor    = glm::vec3(0.8f, 0.05f, 0.05f);
+        glm::vec3 bossEmissive = glm::vec3(4.0f, 0.4f, 0.1f) * (0.7f + 0.3f * pulse);
+
+        float scalePulse = 1.0f + 0.05f * pulse; // 5% squish
 
         glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),
                      1, &bossColor[0]);
@@ -799,6 +814,8 @@ void Realtime::paintGL() {
         glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
 
         glDrawArrays(GL_TRIANGLES, 0, m_cubeNumVerts);
+
+        drawGhostCloth();
     }
 
 
@@ -938,6 +955,338 @@ void Realtime::initSphere() {
     glBindVertexArray(0);
 }
 
+void Realtime::initGhostBuffers() {
+    // 2 triangles per cell * 3 verts per tri
+    m_ghostNumVerts = (GHOST_W - 1) * (GHOST_H - 1) * 6;
+
+    glGenVertexArrays(1, &m_ghostVAO);
+    glGenBuffers(1, &m_ghostVBO);
+
+    glBindVertexArray(m_ghostVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_ghostVBO);
+
+    // Each vertex: 3 pos + 3 normal = 6 floats
+    glBufferData(GL_ARRAY_BUFFER,
+                 m_ghostNumVerts * 6 * sizeof(float),
+                 nullptr,
+                 GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0); // position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                          6 * sizeof(float), (void*)0);
+
+    glEnableVertexAttribArray(1); // normal
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE,
+                          6 * sizeof(float), (void*)(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+}
+
+
+void Realtime::initGhostCloth(const glm::vec3 &bossPos) {
+    m_ghostRestX = m_ghostRestLenX;
+    m_ghostRestZ = m_ghostRestLenZ;
+    m_ghostK       = 25.0f;
+    m_ghostDamping = 1.1f;
+    m_ghostMass    = 1.0f;
+    m_ghostRadius  = 1.6f;
+    m_ghostTime    = 0.0f;
+
+    glm::vec3 headCenter = bossPos + m_ghostOffset;
+
+    float width  = (GHOST_W - 1) * m_ghostRestX;  // ~3.15
+    float depth  = (GHOST_H - 1) * m_ghostRestZ;  // ~3.15
+    float xStart = -0.5f * width;
+    float zStart = -0.5f * depth;
+
+    for (int y = 0; y < GHOST_H; ++y) {
+        for (int x = 0; x < GHOST_W; ++x) {
+            int idx = ghostIndex(x, y);
+
+            float px = xStart + x * m_ghostRestX;
+            float pz = zStart + y * m_ghostRestZ;
+
+            // start slightly above the sphere so it falls onto it
+            m_ghost[idx].pos    = headCenter + glm::vec3(px, 1.3f * m_ghostRadius, pz);
+            m_ghost[idx].vel    = glm::vec3(0.0f);
+            m_ghost[idx].pinned = isGhostPinned(x, y);
+        }
+    }
+}
+
+
+
+
+
+bool Realtime::isGhostPinned(int x, int y) const {
+    // int cx = GHOST_W / 2;
+    // int cy = GHOST_H / 2;
+
+    // int dx = abs(x - cx);
+    // int dy = abs(y - cy);
+
+    // // pin a 3x3 patch in the middle of the cloth
+    // return (dx <= 1 && dy <= 1);
+
+    // Only pin the center chunk of the top row
+    if (y != 0) return false;
+
+    int center = GHOST_W / 2;
+    int halfSpan = 2; // pin ~5 points total: center-2 .. center+2
+    int left  = center - halfSpan;
+    int right = center + halfSpan;
+
+    return (x >= left && x <= right);
+}
+
+float len2(const glm::vec3 &v) {
+    return glm::dot(v, v);
+}
+
+void Realtime::updateGhostCloth(float dt,
+                                const glm::vec3 &bossPos,
+                                const glm::vec3 &bossVel)
+{
+    if (!m_bossActive) return;
+
+    // Clamp dt so the sim stays stable
+    dt = glm::min(dt, 0.02f);
+    m_ghostTime += dt;
+
+    glm::vec3 headCenter = bossPos + m_ghostOffset;
+
+    for (int y = 0; y < GHOST_H; ++y) {
+        for (int x = 0; x < GHOST_W; ++x) {
+
+            int idx = ghostIndex(x, y);
+            GhostParticle &p = m_ghost[idx];
+
+            // ---------- 1. Pinned “collar” around the head ----------
+            if (p.pinned) {
+                // // Use current position to define a direction from the head
+                // glm::vec3 toRest = p.pos - headCenter;
+                // if (glm::dot(toRest, toRest) < 1e-6f) {
+                //     toRest = glm::vec3(0, 1, 0);
+                // }
+                // glm::vec3 dir = glm::normalize(toRest);
+
+                // // Stick it to the sphere and move with the boss
+                // p.pos = headCenter + dir * m_ghostRadius;
+                // p.vel = bossVel;
+                // continue; // no forces on pinned points
+
+
+                float width  = (GHOST_W - 1) * m_ghostRestX;
+                float xStart = -0.5f * width;
+
+                // base “shoulder” height and offset
+                float baseY = 1.7f;   // tweak a bit if needed
+                float baseZ = -0.15f; // slightly behind boss center
+
+                float px = xStart + x * m_ghostRestX;
+
+                // small vertical arc so it's not perfectly straight
+                int center   = GHOST_W / 2;
+                float dxNorm = float(x - center) / float(GHOST_W / 2);
+                float hump   = 0.12f * (1.0f - dxNorm * dxNorm); // max in middle, less at sides
+
+                float py = baseY + hump;
+                float pz = baseZ;
+
+                glm::vec3 anchor = bossPos + glm::vec3(px, py, pz);
+                p.pos = anchor;
+                p.vel = bossVel;
+
+                continue;
+            }
+
+            // ---------- 2. Forces ----------
+            glm::vec3 force(0.0f);
+
+            // Gravity
+            force += glm::vec3(0.0f, -9.8f * m_ghostMass, 0.0f);
+
+            // Structural springs (left/right/up/down)
+            auto addSpring = [&](int nx, int ny, float restLen) {
+                if (nx < 0 || nx >= GHOST_W || ny < 0 || ny >= GHOST_H) return;
+                GhostParticle &q = m_ghost[ghostIndex(nx, ny)];
+
+                glm::vec3 delta = q.pos - p.pos;
+                float dist = glm::length(delta);
+                if (dist < 1e-4f) return;
+
+                glm::vec3 dir = delta / dist;
+                float ext = dist - restLen;
+                force += m_ghostK * ext * dir;
+            };
+
+            addSpring(x - 1, y,     m_ghostRestX);
+            addSpring(x + 1, y,     m_ghostRestX);
+            addSpring(x,     y - 1, m_ghostRestZ);
+            addSpring(x,     y + 1, m_ghostRestZ);
+
+            // Wind for ghosty wobble
+            glm::vec3 windDir = glm::normalize(glm::vec3(1.0f, 0.1f, 0.7f));
+            float     windStrength = 0.6f;
+            float     phase = 0.8f * x + 1.3f * y;
+            float     gust  = sin(m_ghostTime * 2.0f + phase);
+            force += windDir * windStrength * gust;
+
+            // Damping
+            force += -m_ghostDamping * p.vel;
+
+            // ---------- 3. Integrate (semi-implicit Euler) ----------
+            glm::vec3 acc = force / m_ghostMass;
+            p.vel += acc * dt;
+            p.pos += p.vel * dt;
+
+            // ---------- 4. Sphere collision with head ----------
+            glm::vec3 toCenter = p.pos - headCenter;
+            float dist2 = glm::dot(toCenter, toCenter);
+            float r2    = m_ghostRadius * m_ghostRadius;
+
+            if (dist2 < r2) {
+                float dist = sqrt(dist2 + 1e-8f);
+                glm::vec3 n = toCenter / dist;
+
+                // project point back to the sphere surface
+                p.pos = headCenter + n * m_ghostRadius;
+
+                // soften inward velocity
+                float vn = glm::dot(p.vel, n);
+                if (vn < 0.0f) {
+                    p.vel -= (1.0f + 0.3f) * vn * n;
+                }
+            }
+
+            // ---------- 5. Simple floor collision ----------
+            if (p.pos.y < 0.0f) {
+                p.pos.y = 0.0f;
+                if (p.vel.y < 0.0f) p.vel.y = 0.0f;
+            }
+        }
+    }
+}
+
+
+void Realtime::drawGhostCloth() {
+    if (!m_bossActive) return;
+    if (m_ghostVAO == 0 || m_ghostVBO == 0) return;
+
+    // --- 1) Build vertex normals from cloth triangles ---
+
+    glm::vec3 vertexNormals[GHOST_W * GHOST_H];
+    for (int i = 0; i < GHOST_W * GHOST_H; ++i) {
+        vertexNormals[i] = glm::vec3(0.0f);
+    }
+
+    auto addFaceNormal = [&](int x0, int y0,
+                             int x1, int y1,
+                             int x2, int y2) {
+        const glm::vec3 &p0 = m_ghost[ghostIndex(x0, y0)].pos;
+        const glm::vec3 &p1 = m_ghost[ghostIndex(x1, y1)].pos;
+        const glm::vec3 &p2 = m_ghost[ghostIndex(x2, y2)].pos;
+
+        glm::vec3 n = glm::cross(p1 - p0, p2 - p0);
+        if (len2(n) > 1e-8f) n = glm::normalize(n);
+        vertexNormals[ghostIndex(x0, y0)] += n;
+        vertexNormals[ghostIndex(x1, y1)] += n;
+        vertexNormals[ghostIndex(x2, y2)] += n;
+    };
+
+    for (int y = 0; y < GHOST_H - 1; ++y) {
+        for (int x = 0; x < GHOST_W - 1; ++x) {
+            // tri 1
+            addFaceNormal(x,     y,
+                          x + 1, y,
+                          x,     y + 1);
+            // tri 2
+            addFaceNormal(x + 1, y,
+                          x + 1, y + 1,
+                          x,     y + 1);
+        }
+    }
+
+    for (int i = 0; i < GHOST_W * GHOST_H; ++i) {
+        if (len2(vertexNormals[i]) > 1e-8f) {
+            vertexNormals[i] = glm::normalize(vertexNormals[i]);
+        } else {
+            vertexNormals[i] = glm::vec3(0, 1, 0);
+        }
+    }
+
+    // --- 2) Pack vertices into a CPU buffer ---
+
+    std::vector<float> data;
+    data.reserve(m_ghostNumVerts * 6);
+
+    auto pushVertex = [&](int x, int y) {
+        const GhostParticle &gp = m_ghost[ghostIndex(x, y)];
+        const glm::vec3 &n     = vertexNormals[ghostIndex(x, y)];
+        data.push_back(gp.pos.x);
+        data.push_back(gp.pos.y);
+        data.push_back(gp.pos.z);
+        data.push_back(n.x);
+        data.push_back(n.y);
+        data.push_back(n.z);
+    };
+
+    for (int y = 0; y < GHOST_H - 1; ++y) {
+        for (int x = 0; x < GHOST_W - 1; ++x) {
+            // tri 1
+            pushVertex(x,     y);
+            pushVertex(x + 1, y);
+            pushVertex(x,     y + 1);
+            // tri 2
+            pushVertex(x + 1, y);
+            pushVertex(x + 1, y + 1);
+            pushVertex(x,     y + 1);
+        }
+    }
+
+    // Safety: if something went wrong with sizes, bail
+    if ((int)(data.size() / 6) != m_ghostNumVerts) {
+        // You can printf here if you want to check
+        return;
+    }
+
+    // --- 3) Upload to GPU ---
+
+    glBindBuffer(GL_ARRAY_BUFFER, m_ghostVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0,
+                    data.size() * sizeof(float),
+                    data.data());
+
+    // --- 4) Set material & draw ---
+
+    glUseProgram(m_gbufferShader);
+
+    // Very bright ghosty colour so we *see* it
+    glm::vec3 ghostColor    = glm::vec3(0.7f, 0.9f, 1.0f);
+    glm::vec3 ghostEmissive = glm::vec3(0.6f, 0.9f, 1.5f);
+
+    glUniform3fv(glGetUniformLocation(m_gbufferShader, "albedoColor"),
+                 1, &ghostColor[0]);
+    glUniform3fv(glGetUniformLocation(m_gbufferShader, "emissiveColor"),
+                 1, &ghostEmissive[0]);
+    glUniform1i(glGetUniformLocation(m_gbufferShader, "useTexture"), 0);
+
+    glm::mat4 model(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "model"),
+                       1, GL_FALSE, &model[0][0]);
+
+    // Temporarily disable culling so we see both sides
+    GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
+
+    glBindVertexArray(m_ghostVAO);
+    glDrawArrays(GL_TRIANGLES, 0, m_ghostNumVerts);
+    glBindVertexArray(0);
+
+    if (cullEnabled) glEnable(GL_CULL_FACE);
+}
+
+
 
 
 //When snake dies/ to spawn snake
@@ -973,6 +1322,7 @@ void Realtime::resetSnake() {
     m_bossPos    = glm::vec3(0.f);   // doesn't matter, not drawn when inactive
     m_bossVel    = glm::vec3(0.f);
     m_timeLeft   = 20.0f;
+    initGhostCloth(m_bossPos);
 
     m_speedBoostActive = false;
     m_speedBoostTimer  = 0.f;
