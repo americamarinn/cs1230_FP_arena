@@ -43,6 +43,8 @@ void Realtime::finish() {
     glDeleteTextures(1, &m_lightingTexture);
     glDeleteFramebuffers(2, m_pingpongFBO);
     glDeleteTextures(2, m_pingpongColorbuffers);
+    for (auto& portal : m_portals) portal->cleanup();
+    m_portals.clear();
     doneCurrent();
 }
 
@@ -198,6 +200,20 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Integrate position on XZ plane
     m_snakeState.pos += m_snakeState.vel * deltaTime;
     m_snakeState.pos.y = 1.0f;   // stay on floor plane
+
+
+    // handle teleports
+    if (checkPortalTeleport(m_snakeState.pos, m_snakeState.vel)) {
+        for (size_t i = 0; i < std::min((size_t)8, m_snakeTrail.size()); i++)  {
+            glm::vec3 dummyVel(0.0f);
+            checkPortalTeleport(m_snakeTrail[i], dummyVel);
+        }
+    }
+
+    // update teleport cooldown
+    if (m_teleportCooldown > 0.0f) {
+        m_teleportCooldown -= deltaTime;
+    }
 
     // Jump motion
     if (!m_snakeOnGround) {
@@ -421,8 +437,13 @@ bool Realtime::snakeHeadHitsWall() const {
     // top ≈ 1.25 + WALL_H/2 = 3.0
     const float wallTopY = 3.0f;
 
+    const float portalHW = m_portalWidth / 2.0f;
+    bool inPortalZone = (std::abs(p.x) > arenaBounds - 1.0f) &&
+                        (std::abs(p.z) < portalHW);
+
     // --- 1) Outer arena bounds ---
-    if ((std::abs(p.x) > arenaBounds || std::abs(p.z) > arenaBounds) &&
+    if (!inPortalZone &&
+        (std::abs(p.x) > arenaBounds || std::abs(p.z) > arenaBounds) &&
         headBottomY < wallTopY) {
         return true;
     }
@@ -482,7 +503,29 @@ void Realtime::drawVoxelText(glm::vec3 startPos, std::string text, glm::vec3 col
     }
 }
 
+bool Realtime::checkPortalTeleport(glm::vec3 &pos, glm::vec3 &vel) {
+    const float hw = m_portalWidth * 0.5f;  // half portal width
 
+    if (m_teleportCooldown > 0.0f) {
+        return false;
+    }
+
+    // left -> right
+    if (pos.x < -m_portalRadius && std::abs(pos.z) < hw) {
+        pos.x = m_portalRadius - 1.0f;
+        m_teleportCooldown = 0.2f;
+        return true;
+    }
+
+    // right -> left
+    if (pos.x > m_portalRadius && std::abs(pos.z) < hw) {
+        pos.x = -m_portalRadius + 1.0f;
+        m_teleportCooldown = 0.2f;
+        return true;
+    }
+
+    return false;
+}
 
 void Realtime::buildNeonScene() {
     m_props.clear();
@@ -542,6 +585,9 @@ void Realtime::buildNeonScene() {
     m_props.push_back({ glm::vec3( b3, 3.0f, off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
     m_props.push_back({ glm::vec3( b3, 3.0f, -off3), glm::vec3(1.0f, 4.0f, len3*2), cBorder, 2.0f, m_wallTexture });
 
+    // setup portals
+    makePortals();
+
     // Portal Pads
     glm::vec3 cPortal(1.0f, 0.0f, 1.0f); // Magenta
     m_props.push_back({ glm::vec3(-RADIUS, -0.5f, 0), glm::vec3(1.0f, 0.1f, gapSize), cPortal, 5.0f, 0 });
@@ -599,6 +645,52 @@ void Realtime::buildNeonScene() {
 
     // 5. TITLE TEXT (With Texture!)
     drawVoxelText(glm::vec3(-25.0f, 12.0f, -RADIUS - 5.0f), "CS1230", glm::vec3(0,1,1), 2.5f, m_wallTexture);
+}
+
+void Realtime::makePortals() {
+
+    // create portal shader
+    portalShader = ShaderLoader::createShaderProgram(
+        ":/resources/shaders/portal.vert",
+        ":/resources/shaders/portal.frag"
+        );
+
+    // create portal border shader
+    portalBorderShader = ShaderLoader::createShaderProgram(
+        ":/resources/shaders/portal_border.vert",
+        ":/resources/shaders/portal_border.frag");
+
+    // two portals facing each other
+
+    const float r = 28.0f;
+    const float height = 1.5f;
+    const glm::vec2 portalSize(8.0f, 8.0f);
+
+    auto portal1 = std::make_shared<Portal>(
+        glm::vec3(-r, height, 0.0f),    // position
+        glm::vec3(1.0f, 0.0f, 0.0f),    // front face plane normal
+        portalSize
+        );
+    portal1->setColor(glm::vec3(1.0f, 0.0f, 1.0f)); // magenta
+
+
+    auto portal2 = std::make_shared<Portal>(
+        glm::vec3(r, height, 0.0f),
+        glm::vec3(-1.0f, 0.0f, 0.0f),
+        portalSize
+        );
+    portal2->setColor(glm::vec3(1.0f, 0.0f, 1.0f)); // magenta
+
+
+    // link portals
+    portal1->linkPortal(portal2);
+    portal2->linkPortal(portal1);
+
+    m_portals.push_back(portal1);
+    m_portals.push_back(portal2);
+
+    // initialize portals
+    for (auto& portal : m_portals) portal->initialize();
 }
 
 void Realtime::paintGL() {
@@ -760,6 +852,7 @@ void Realtime::paintGL() {
             foodColor    = glm::vec3(0.25f, 0.30f, 0.10f);
             foodEmissive = glm::vec3(0.20f, 0.30f, 0.12f);
         }
+
         else if (m_foodType == FOOD_SPEED) {
             // Electric cyan-ish
             foodColor    = glm::vec3(0.0f, 0.7f, 1.0f);
@@ -1285,8 +1378,6 @@ void Realtime::drawGhostCloth() {
 
     if (cullEnabled) glEnable(GL_CULL_FACE);
 }
-
-
 
 
 //When snake dies/ to spawn snake

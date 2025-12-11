@@ -21,6 +21,7 @@
 #include "terraingenerator.h"
 #include "utils/cube.h"
 #include "utils/sphere.h"
+#include "portal.h"
 
 enum GameState {
     START_SCREEN,
@@ -276,4 +277,13 @@ private:
 
     void spawnFood();
     GLuint loadTexture2D(const std::string &path);
+
+    // portal things
+    bool checkPortalTeleport(glm::vec3& pos, glm::vec3& vel);
+    void makePortals();
+    const float m_portalRadius = 28.0f;
+    const float m_portalWidth = 8.0f;
+    float m_teleportCooldown = 0.0f;
+    std::vector<std::shared_ptr<Portal>> m_portals;
+    GLuint portalShader = 0; GLuint portalBorderShader = 0;
 };

@@ -53,6 +53,7 @@ add_executable(${PROJECT_NAME}
     src/utils/gbuffer.h src/utils/gbuffer.cpp
     src/utils/debug.h
     src/utils/snakegame.h src/utils/snakegame.cpp
+    src/portal.h src/portal.cpp
 )
 
 # GLM: this creates its library and allows you to `#include "glm/..."`
@@ -88,13 +89,19 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
         resources/textures/start_screen.jpg
         resources/textures/wall_texture.png
 
-        # deffered rendering pipeline shaders
+        # deferred rendering pipeline shaders
         resources/shaders/blur.frag
         resources/shaders/composite.frag
         resources/shaders/deferredLighting.frag
         resources/shaders/fullscreen_quad.vert
         resources/shaders/gbuffer.frag
         resources/shaders/gbuffer.vert
+
+        # ----- NEW PORTAL SHADERS -----
+        resources/shaders/portal.frag
+        resources/shaders/portal.vert
+        resources/shaders/portal_border.frag
+        resources/shaders/portal_border.vert
 )
 
 
